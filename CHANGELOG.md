@@ -86,6 +86,21 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   cap also bounds the registry's lifetime; restart or raise the cap to
   admit new offers again. Regression tests cover the flood drop and
   the preserved duplicate semantics.
+- Security (Node-1): the daemon silently ignored DaemonConfig.network -
+  whatever the operator configured (or typo'd), the node always ran the
+  same hardcoded mix of a mainnet-shaped state over testnet parameters.
+  The configured network is now validated strictly ("mainnet" |
+  "testnet", case/whitespace normalized) BEFORE any side effect - an
+  unknown value refuses startup (InitFailed) and leaves no data dir
+  behind - and the consensus bundle flows through one documented
+  selection point (pre-mainnet there is exactly one defined parameter
+  set - the testnet set, v4 active from genesis - and one normative
+  sparse accumulator shape, so both networks resolve to the same
+  construction today; that match is the single place to extend when
+  mainnet parameters land). The effective consensus parameters are
+  logged at startup and opacusd gained a --network flag wired into
+  DaemonConfig. Regression tests cover the strict validation, the
+  normalization and the testnet selection.
 
 ## [0.7.0] - 2026-10-23
 

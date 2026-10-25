@@ -13,6 +13,10 @@ struct Args {
     p2p_port: u16,
     #[arg(short, long, default_value_t = 18081)]
     rpc_port: u16,
+    /// Chain to run: "mainnet" | "testnet" (validated by the daemon -
+    /// Node-1; an unknown value refuses startup).
+    #[arg(short = 'n', long, default_value = "mainnet")]
+    network: String,
     #[arg(long)]
     tor: bool,
 }
@@ -36,8 +40,8 @@ async fn main() {
         p2p_port: args.p2p_port,
         rpc_port: args.rpc_port,
         data_dir: PathBuf::from(expanded),
+        network: args.network,
         use_tor: args.tor,
-        ..Default::default()
     };
 
     // v0.6 N2b: authenticated net node + peer discovery. The node identity

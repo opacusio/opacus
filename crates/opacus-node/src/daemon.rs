@@ -35,6 +35,24 @@ impl Default for DaemonConfig {
     }
 }
 
+/// The consensus bundle a daemon runs, selected from the configured
+/// network (Node-1). Pre-mainnet the codebase defines exactly one
+/// parameter set - the testnet set (v4 active from genesis, zero fee
+/// floor [S4 9]) - and one normative accumulator shape (the sparse
+/// 2^32-slot frontier), so both networks resolve to the same
+/// construction today; this match is the single place to extend when
+/// mainnet parameters land. The network string is validated strictly:
+/// an unknown value refuses startup instead of being silently ignored
+/// (case and surrounding whitespace are normalized).
+fn select_consensus(network: &str) -> Result<(ConsensusState, ConsensusParams), DaemonError> {
+    match network.trim().to_ascii_lowercase().as_str() {
+        "mainnet" | "testnet" => Ok((ConsensusState::mainnet(), ConsensusParams::testnet())),
+        other => Err(DaemonError::InitFailed(format!(
+            "unknown network \"{other}\" (expected \"mainnet\" or \"testnet\")"
+        ))),
+    }
+}
+
 pub struct OpacusDaemon {
     config: DaemonConfig,
     height: u64,
@@ -44,14 +62,23 @@ pub struct OpacusDaemon {
 
 impl OpacusDaemon {
     pub fn new(config: DaemonConfig) -> Result<Self, DaemonError> {
+        // Node-1: validate the network BEFORE any side effect - an
+        // unknown value fails fast and leaves no data dir behind.
+        let (consensus, params) = select_consensus(&config.network)?;
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| DaemonError::InitFailed(e.to_string()))?;
         tracing::info!("Ghost daemon initialized at {:?}", config.data_dir);
+        tracing::info!(
+            "consensus: net={} | v4_activation_height={} | fee_floor={}",
+            config.network,
+            params.v4_activation_height,
+            params.fee_floor
+        );
         Ok(Self {
             config,
             height: 0,
-            consensus: ConsensusState::mainnet(),
-            params: ConsensusParams::testnet(),
+            consensus,
+            params,
         })
     }
 
@@ -152,5 +179,66 @@ mod tests {
         assert_eq!(d.consensus().seen_count(), 0);
         assert_eq!(d.params().fee_floor, 0);
         assert_eq!(d.params().v4_activation_height, 0);
+    }
+
+    fn tmp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ghost-daemon-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    /// Node-1: the configured network is honored - "testnet" constructs
+    /// the daemon over the testnet parameter set.
+    #[test]
+    fn daemon_honors_configured_network_testnet() {
+        let d = OpacusDaemon::new(DaemonConfig {
+            data_dir: tmp_dir(),
+            network: "testnet".to_string(),
+            ..DaemonConfig::default()
+        })
+        .expect("testnet daemon init");
+        assert_eq!(d.params().v4_activation_height, 0);
+        assert_eq!(d.params().fee_floor, 0);
+        assert_eq!(d.consensus().leaf_count(), 0);
+        assert_eq!(d.consensus().seen_count(), 0);
+    }
+
+    /// Node-1: an unknown network value refuses startup (InitFailed) and
+    /// leaves no side effects - the data dir is not even created.
+    #[test]
+    fn daemon_refuses_unknown_network() {
+        let dir = tmp_dir();
+        let res = OpacusDaemon::new(DaemonConfig {
+            data_dir: dir.clone(),
+            network: "mainet".to_string(),
+            ..DaemonConfig::default()
+        });
+        // Result::expect_err would need OpacusDaemon: Debug; the match
+        // keeps the production type untouched.
+        let err = match res {
+            Err(e) => e,
+            Ok(_) => panic!("a typo'd network must refuse startup"),
+        };
+        assert!(matches!(err, DaemonError::InitFailed(_)));
+        assert!(err.to_string().contains("unknown network"), "{err}");
+        assert!(!dir.exists(), "no side effects before validation");
+    }
+
+    /// Node-1: the network string is normalized (case + surrounding
+    /// whitespace) instead of compared verbatim.
+    #[test]
+    fn daemon_network_is_normalized() {
+        let d = OpacusDaemon::new(DaemonConfig {
+            data_dir: tmp_dir(),
+            network: "  TestNet  ".to_string(),
+            ..DaemonConfig::default()
+        })
+        .expect("normalized network must be accepted");
+        assert_eq!(d.params().fee_floor, 0);
     }
 }
