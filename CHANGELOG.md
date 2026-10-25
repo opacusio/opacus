@@ -74,6 +74,18 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   (workspace inheritance or an explicit Apache-2.0 field); cargo-deny
   0.20.2 (the exact CI version) verifies clean locally: advisories ok,
   bans ok, licenses ok, sources ok.
+- Security (Net-2): the swap plane's session registry grew without
+  bound - every inbound Offer (including one arriving through the
+  authenticated Upgrade plane) inserted a new tracked session, so a
+  single flooding peer could balloon node memory without limit.
+  SwapNodeConfig.max_sessions (default 64) now caps the registry: a
+  NEW offer arriving at cap is dropped before the state machine (no
+  reply, connection kept open, Rejected event), already-tracked offers
+  keep their exact DuplicateOffer semantics, and non-Offer frames keep
+  flowing on the same connection. v0.1 never evicts sessions, so the
+  cap also bounds the registry's lifetime; restart or raise the cap to
+  admit new offers again. Regression tests cover the flood drop and
+  the preserved duplicate semantics.
 
 ## [0.7.0] - 2026-10-23
 

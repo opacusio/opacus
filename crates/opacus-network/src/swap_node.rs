@@ -163,6 +163,14 @@ pub struct SwapNodeConfig {
     pub read_timeout: Duration,
     /// Hard cap for one incoming frame (prefix + body).
     pub max_frame_len: usize,
+    /// Hard cap on concurrently tracked swap sessions (Net-2). A NEW
+    /// inbound Offer arriving while the registry is at the cap is
+    /// dropped before the state machine (Rejected event, no reply, the
+    /// connection stays open); already-tracked offers keep their exact
+    /// DuplicateOffer semantics and non-Offer frames keep flowing.
+    /// v0.1 never evicts sessions, so the cap also bounds the
+    /// registry's lifetime.
+    pub max_sessions: usize,
     /// INITIAL block height; afterwards the live value is driven by
     /// [`SwapNode::set_height`] (opacusd feeds it per accepted block).
     pub current_height: u64,
@@ -175,6 +183,7 @@ impl Default for SwapNodeConfig {
             bootstrap_peers: Vec::new(),
             read_timeout: Duration::from_secs(30),
             max_frame_len: 1_048_576,
+            max_sessions: 64,
             current_height: 0,
         }
     }
@@ -368,7 +377,32 @@ impl SwapNode {
     /// Process one inbound wire frame without any socket: the pure protocol
     /// step of conn_loop (handy for tests and embedded hosts). Returns the
     /// encoded auto-reply frames.
+    ///
+    /// Net-2 admission cap: a NEW Offer arriving while the session
+    /// registry is at `max_sessions` is dropped before it reaches the
+    /// state machine - no reply, no error, the connection stays open
+    /// (a Rejected event marks the drop). Offers already tracked keep
+    /// their exact DuplicateOffer semantics; every non-Offer frame is
+    /// unaffected. This bounds the registry against an Offer flood
+    /// through the authenticated Upgrade plane.
     pub fn process_wire(&self, wire: &[u8]) -> Result<Vec<Vec<u8>>, NetError> {
+        let offer_capped = match decode_frame(wire) {
+            Ok(frame) => match frame.msg {
+                SwapNetMessage::Offer { ref offer_id, .. } => {
+                    let net = self.net.lock().unwrap();
+                    net.session(offer_id).is_none() && net.session_count() >= self.cfg.max_sessions
+                }
+                _ => false,
+            },
+            Err(_) => false,
+        };
+        if offer_capped {
+            self.log(NodeEvent::Rejected(format!(
+                "offer cap reached ({} sessions)",
+                self.cfg.max_sessions
+            )));
+            return Ok(Vec::new());
+        }
         Ok(self
             .net
             .lock()
@@ -488,10 +522,16 @@ mod tests {
     /// An Offer frame built the way an EXTERNAL peer would build it
     /// (nothing registered locally).
     fn external_offer_wire() -> (String, Vec<u8>) {
+        external_offer_wire_with(PREIMAGE)
+    }
+
+    /// Same, for an arbitrary preimage - distinct offers need distinct
+    /// payloads (the offer id is blake3 over the canonical payload).
+    fn external_offer_wire_with(preimage: [u8; 32]) -> (String, Vec<u8>) {
         let payload = SwapOfferPayload {
             xmr_piconero: 2_000_000_000_000,
             ghost_atoms: 1_000_000_000,
-            hashlock: hex_str(&hashlock_of(&PREIMAGE)),
+            hashlock: hex_str(&hashlock_of(&preimage)),
             fund_timeout_blocks: 100,
             claim_timeout_blocks: 200,
             maker_ghost_address: "ghost-maker-addr".to_string(),
@@ -824,6 +864,76 @@ mod tests {
             .events()
             .iter()
             .any(|e| matches!(e, NodeEvent::Replied(ref k) if k == "Claim")));
+    }
+
+    /// Net-2: a NEW Offer arriving while the registry is at max_sessions
+    /// is dropped - no reply, no session created, the connection stays
+    /// alive (Rejected event) and the registry stays exactly at the cap;
+    /// non-Offer frames keep flowing on the same node.
+    #[test]
+    fn offer_flood_capped_in_process() {
+        let cfg = SwapNodeConfig {
+            max_sessions: 2,
+            ..test_cfg()
+        };
+        let node = SwapNode::start(cfg).unwrap();
+
+        let (id1, w1) = external_offer_wire_with([1u8; 32]);
+        let (_id2, w2) = external_offer_wire_with([2u8; 32]);
+        let (_id3, w3) = external_offer_wire_with([3u8; 32]);
+
+        assert_eq!(node.process_wire(&w1).unwrap().len(), 1); // Accept
+        assert_eq!(node.process_wire(&w2).unwrap().len(), 1); // Accept
+        assert_eq!(node.net().lock().unwrap().session_count(), 2);
+
+        // the flood: a third NEW offer at cap -> dropped, not an error
+        let replies = node.process_wire(&w3).unwrap();
+        assert!(replies.is_empty());
+        assert_eq!(node.net().lock().unwrap().session_count(), 2);
+        assert!(node
+            .events()
+            .iter()
+            .any(|e| matches!(e, NodeEvent::Rejected(m) if m.contains("offer cap"))));
+
+        // non-Offer frames keep flowing: the taker-side session still
+        // completes its GhostLocked -> Claim step after the cap drop
+        // (the choreography needs XmrLocked before GhostLocked)
+        node.net()
+            .lock()
+            .unwrap()
+            .publish_xmr_lock(&id1, "xmr-tx-capped", 1020)
+            .unwrap();
+        let ghost = Frame::new(SwapNetMessage::GhostLocked {
+            offer_id: id1,
+            ghost_tx_ref: "ghost-burn-capped".to_string(),
+            height: 1050,
+            preimage: hex_str(&[1u8; 32]),
+        });
+        let replies = node.process_wire(&encode_frame(&ghost).unwrap()).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(
+            decode_frame(&replies[0]).unwrap().msg,
+            SwapNetMessage::Claim { .. }
+        ));
+    }
+
+    /// Net-2: an ALREADY tracked offer keeps its exact DuplicateOffer
+    /// semantics even at cap (the cap only gates NEW sessions).
+    #[test]
+    fn offer_cap_keeps_duplicate_semantics() {
+        let cfg = SwapNodeConfig {
+            max_sessions: 1,
+            ..test_cfg()
+        };
+        let node = SwapNode::start(cfg).unwrap();
+        let (_id, wire) = external_offer_wire_with([9u8; 32]);
+        node.process_wire(&wire).unwrap(); // registry now at cap (1/1)
+        let err = node.process_wire(&wire).unwrap_err(); // retransmit
+        assert!(matches!(
+            err,
+            NetError::Protocol(SwapNetError::DuplicateOffer)
+        ));
+        assert_eq!(node.net().lock().unwrap().session_count(), 1);
     }
 
     /// The offerId binding: a tampered payload (same offer_id) is rejected
