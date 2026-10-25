@@ -12,7 +12,7 @@ commits and tags are not patched in place.
 
 Do NOT open a public GitHub issue for anything with security impact:
 key handling, proof circuits, consensus, the network protocol, bridge
-custody, the wGHOST contracts, deployment tooling.
+custody, the wOPACUS contract and the legacy wGHOST deployment, tooling.
 
 Report privately instead, in this order:
 

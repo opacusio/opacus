@@ -12,6 +12,21 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
 
+### Changed
+
+- Contracts (WG-16 stage 1): the wrapped native token is rebranded to
+  wOPACUS ("Wrapped Opacus", contracts/wOPACUS.sol). Redeploy hardening
+  (audit WG-16): quorum fixed N-of-M at deployment (constructor range
+  checks, QuorumConfigured event, no updateQuorum), the mint digest
+  binds block.chainid under the "opacus-lock-v1" domain, the EIP-2
+  low-s range is enforced, and the forge suite grew to 10 tests. The
+  legacy wGHOST Sepolia deployment cannot be renamed in place (the name
+  compiles into the deployed bytecode); its address record stays in
+  contracts/wghost.address until the redeploy round.
+- opacus-dex: wghost module renamed to wopacus (WOPACUS_ADDRESS env,
+  legacy WGHOST_ADDRESS fallback); ABI encoder gained dynamic string
+  support (two-pass head/tail); burn() and topics match the contract.
+
 ### Fixed
 
 - Security (C-01): the Schnorr nonce of the cross-group DLEq proof

@@ -7,7 +7,7 @@ Monero (ring-CT semantics, stealth addresses, Pedersen commitments) with
 zk-SNARK spend anonymity in the spirit of Zcash Halo2 / FCMP++: every spend
 carries a succinct proof that its key material belongs to the global set of
 all wallet keys. Around the shielded core, Opacus ships an Ethereum-side
-wrapped token (wGHOST), a DEX/bridge toolchain, and an atomic-swap stack for
+wrapped token (wOPACUS), a DEX/bridge toolchain, and an atomic-swap stack for
 Monero <-> Opacus exchange, together with a zero-typing Windows (PowerShell)
 tooling chain.
 
@@ -71,9 +71,9 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
 | `crates/opacus-consensus` | Consensus v4: validation order [S4 9], activation-height gate, nullifier seen-set, fee floor |
 | `crates/opacus-node` | Daemon: transaction submission gated by consensus `accept_transaction` |
 | `crates/opacus-bridge` | Monero bridge: cross-group DLEq, atomic-swap state machine, Monero RPC, swap P2P protocol |
-| `crates/opacus-dex` | Ethereum side: RLP, ABI, EIP-155 signer, Uniswap Router02 calldata, JSON-RPC client, wGHOST helpers |
+| `crates/opacus-dex` | Ethereum side: RLP, ABI, EIP-155 signer, Uniswap Router02 calldata, JSON-RPC client, wOPACUS helpers |
 | `crates/opacus-network` | Networking: node identity + DLEq handshake, persistent peers + disco gossip, encrypted note feed, TCP swap node, swap-plane handover |
-| `contracts/` | wGHOST.sol (quorum-mint ERC-20 wrapper) + Foundry deployment script and tests |
+| `contracts/` | wOPACUS.sol (quorum-mint ERC-20 wrapper) + Foundry deployment script and tests |
 | repo root | Zero-typing PowerShell tooling: Sepolia deploy chain, key rotation, GitHub publish, release |
 
 ## Components
@@ -166,7 +166,7 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   approve/transfer/balanceOf.
 - Ethereum JSON-RPC client (eth_call, gasPrice, nonce, estimateGas,
   sendRawTransaction) with fake-transport tests.
-- wGHOST helpers: set_wghost/burn calldata and Mint/Burn event topics.
+- wOPACUS helpers: set_wopacus/burn calldata and Minted/Burned event topics.
 
 ### opacus-network (networking + swap node)
 
@@ -197,14 +197,18 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   GhostLocked -> Claim) with protocol-violation disconnects; adopted
   (upgraded) connections speak the swap protocol directly.
 
-### contracts (wGHOST token)
+### contracts (wOPACUS token)
 
-- `wGHOST.sol`: ERC-20 wrapper with quorum-gated mint (sorted-signature
+- `wOPACUS.sol`: ERC-20 wrapper with quorum-gated mint (sorted-signature
   ecrecover check) and burn-for-release; deployed to the Sepolia testnet
   (address tracked in `contracts/wghost.address`), quorum threshold 1/1 for
-  testnet. Marked AUDIT REQUIRED.
-- `wGHOST.s.sol` + `foundry.toml`: reproducible forge deployment script with
-  environment-configured quorum signers.
+  testnet. Marked AUDIT REQUIRED before any mainnet use.
+- `foundry.toml` + `WOPACUSTest.t.sol`: forge suite for the wrapper - the
+  WG-16 hardening pins the quorum N-of-M at deployment, binds the mint
+  digest to block.chainid and enforces the EIP-2 low-s range.
+- Legacy wGHOST (quorum 1/1) is DEPRECATED: the contract name compiles
+  into the deployed bytecode and cannot be renamed in place, so the
+  rebrand ships as a fresh wOPACUS deployment (audit WG-16).
 
 ## Build and test
 
@@ -251,7 +255,8 @@ membership-path count) is queued for the next minor release - see
 ## Sepolia deployment (zero-typing PowerShell chain)
 
 1. `run_sepolia_deploy.ps1` - funds gate, in-process deployer key.
-2. `deploy_wghost.ps1` - deploys wGHOST.sol to Sepolia.
+2. `deploy_wghost.ps1` - deploys the wrapped-token contract to Sepolia
+   (legacy wGHOST run; the WG-16 redeploy round ships wOPACUS).
 3. `finalize_wghost.ps1` - bytecode gate, soft token calls, hard quorum
    cross-checks, persists the address to `contracts/wghost.address`.
 
@@ -277,8 +282,10 @@ GitHub publish with secret gates and no force-push).
   wrapper: the scalar is scrubbed from memory when the identity is
   dropped, and the identity Debug output never includes secret
   material.
-- The wGHOST mint is quorum-gated; the testnet quorum is 1/1. An external
-  audit is REQUIRED before any mainnet use; testnet keys are throwaway.
+- The wOPACUS mint is quorum-gated; the threshold is fixed N-of-M at
+  deployment (no in-place quorum updates). The legacy wGHOST Sepolia
+  deployment (quorum 1/1) is deprecated. An external audit is REQUIRED
+  before any mainnet use; testnet keys are throwaway.
 
 ## Roadmap
 

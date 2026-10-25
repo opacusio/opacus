@@ -1,5 +1,5 @@
 //! Minimal Ethereum ABI encoding for the subset Uniswap integration needs:
-//! uint256, address, bool, dynamic address[] and function selectors.
+//! uint256, address, bool, dynamic address[]/string and function selectors.
 
 use crate::rlp::u256_from_u128;
 use tiny_keccak::{Hasher, Keccak};
@@ -37,6 +37,8 @@ pub enum AbiArg {
     Address([u8; 20]),
     /// dynamic address[] (encoded as offset + length + words)
     AddressArray(Vec<[u8; 20]>),
+    /// dynamic UTF-8 string (offset + length + bytes + padding)
+    Str(String),
 }
 
 impl AbiArg {
@@ -60,22 +62,27 @@ impl AbiArg {
 }
 
 /// Encode a function call: selector + head/tail encoded arguments.
+///
+/// Two-pass layout: all head words are emitted first, then all dynamic
+/// tails. Appending a dynamic arg's tail inline interleaves it between
+/// the head words of the static args that follow - a payload no contract
+/// can decode.
 pub fn encode_call(sig: &str, args: &[AbiArg]) -> Vec<u8> {
     let mut out = selector(sig).to_vec();
 
-    // static heads; dynamic args place an offset into their tail
+    // static head words; dynamic args place an offset into their tail
     let static_heads: Vec<Vec<u8>> = args
         .iter()
         .map(|a| match a {
             AbiArg::Word(w) => word(w),
             AbiArg::Address(a) => word(a),
-            AbiArg::AddressArray(_) => word(&[]), // placeholder, fixed below
+            AbiArg::AddressArray(_) | AbiArg::Str(_) => word(&[]), // placeholder, fixed below
         })
         .collect();
 
     let dynamic_count = args
         .iter()
-        .filter(|a| matches!(a, AbiArg::AddressArray(_)))
+        .filter(|a| matches!(a, AbiArg::AddressArray(_) | AbiArg::Str(_)))
         .count();
     if dynamic_count == 0 {
         for h in static_heads {
@@ -84,24 +91,28 @@ pub fn encode_call(sig: &str, args: &[AbiArg]) -> Vec<u8> {
         return out;
     }
 
-    // head size = one word per arg; tail starts after that
+    // head size = one word per argument; the tail area starts after that
     let head_words = args.len();
     let mut tails: Vec<Vec<u8>> = Vec::new();
-    let mut tail_size = 0usize;
     for a in args {
-        if let AbiArg::AddressArray(items) = a {
-            // length word + one word per address
-            let sz = 32 * (1 + items.len());
-            tails.push(encode_address_array(items));
-            tail_size += sz;
+        match a {
+            AbiArg::AddressArray(items) => {
+                // length word + one 32-byte word per address
+                tails.push(encode_address_array(items));
+            }
+            AbiArg::Str(s) => {
+                // length word + bytes + zero padding to a word
+                tails.push(encode_string(s));
+            }
+            _ => {}
         }
     }
-    // assign offsets in argument order
+    // assign tail offsets in argument order
     let mut offsets = Vec::with_capacity(args.len());
     let mut running = head_words * 32;
     let mut dyn_idx = 0usize;
     for a in args {
-        if matches!(a, AbiArg::AddressArray(_)) {
+        if matches!(a, AbiArg::AddressArray(_) | AbiArg::Str(_)) {
             offsets.push(running);
             running += tails[dyn_idx].len();
             dyn_idx += 1;
@@ -110,18 +121,19 @@ pub fn encode_call(sig: &str, args: &[AbiArg]) -> Vec<u8> {
         }
     }
 
-    let mut dyn_i = 0usize;
+    // pass 1: all head words (static value or tail offset) ...
     for (i, a) in args.iter().enumerate() {
         match a {
-            AbiArg::AddressArray(_) => {
+            AbiArg::AddressArray(_) | AbiArg::Str(_) => {
                 out.extend_from_slice(&word(&u128_to_be32(offsets[i])));
-                out.extend_from_slice(&tails[dyn_i]);
-                dyn_i += 1;
             }
             _ => out.extend_from_slice(&static_heads[i]),
         }
     }
-    let _ = tail_size;
+    // pass 2: ... then all dynamic tails in argument order
+    for t in &tails {
+        out.extend_from_slice(t);
+    }
     out
 }
 
@@ -136,6 +148,15 @@ fn encode_address_array(items: &[[u8; 20]]) -> Vec<u8> {
     for a in items {
         out.extend_from_slice(&word(a));
     }
+    out
+}
+
+fn encode_string(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = word(&(bytes.len() as u128).to_be_bytes());
+    out.extend_from_slice(bytes);
+    let pad = (32 - bytes.len() % 32) % 32;
+    out.extend(std::iter::repeat_n(0u8, pad));
     out
 }
 
@@ -208,5 +229,49 @@ mod tests {
         // first address starts after 32 zero-padding bytes
         assert_eq!(&tail[32 + 12..32 + 32], &a);
         assert_eq!(&tail[64 + 12..64 + 32], &b);
+    }
+
+    #[test]
+    fn string_encoding() {
+        // burn(uint256,string): amount 1000, "opacus-recipient" (16 bytes)
+        let data = encode_call(
+            "burn(uint256,string)",
+            &[
+                AbiArg::uint_u128(1000),
+                AbiArg::Str("opacus-recipient".into()),
+            ],
+        );
+        assert_eq!(data.len(), 4 + 32 + 32 + 32 + 32);
+        // offset of the string tail = 2 head words = 64
+        assert_eq!(data[4 + 63], 64);
+        // amount word: 1000 = 0x03E8
+        assert_eq!(data[4 + 30], 0x03);
+        assert_eq!(data[4 + 31], 0xe8);
+        // tail: length word = 16, then the UTF-8 bytes, zero padding
+        let tail = &data[4 + 64..];
+        assert_eq!(tail[31], 16);
+        assert_eq!(&tail[32..48], b"opacus-recipient");
+        assert_eq!(&tail[48..64], &[0u8; 16]);
+    }
+
+    #[test]
+    fn string_first_offset_order() {
+        // a dynamic arg FIRST must not interleave its tail between the
+        // head words of the static args that follow (regression: the
+        // single-pass emitter did exactly that)
+        let data = encode_call(
+            "burn(string,uint256)",
+            &[AbiArg::Str("ab".into()), AbiArg::uint_u128(7)],
+        );
+        assert_eq!(data.len(), 4 + 32 + 32 + 32 + 32);
+        // head 0: offset of the string tail = 2 words = 64
+        assert_eq!(data[4 + 31], 64);
+        // head 1: the uint256 7 (static head must follow the offset)
+        assert_eq!(data[4 + 63], 7);
+        // tail: length 2, "ab", 30 zero pad bytes
+        let tail = &data[4 + 64..];
+        assert_eq!(tail[31], 2);
+        assert_eq!(&tail[32..34], b"ab");
+        assert_eq!(&tail[34..64], &[0u8; 30]);
     }
 }
