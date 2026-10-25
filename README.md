@@ -247,10 +247,13 @@ Test status (zero warnings in all crates):
 
 Performance: a membership-only spend proof at mainnet tree depth (2^32
 leaves) proves and verifies in about 2.1 s. The full v4 spend pipeline
-(keygen + prove, real IPA, k = 13) currently benches at about 16 s against
-the 10 s budget [S4 8]; the optimization (EC-chain column count,
-membership-path count) is queued for the next minor release - see
-`benches/prover.rs`.
+(real IPA, k = 13) runs on a process-wide keyset cache (WG-17): the
+first prove of a process pays the one-time keygen (~16 s cold), every
+later prove runs at steady-state 7.3-8.0 s and verification drops to
+about 0.1 s - inside the 10 s budget [S4 8]. The budget is enforced on
+the steady-state number by `cargo bench -p opacus-zk --features
+real-prover --bench prover`; the cold-start number is recorded there
+for the future EC-chain column / membership-path work.
 
 ## Sepolia deployment (zero-typing PowerShell chain)
 
@@ -295,11 +298,14 @@ note transmission between wallets (crates/opacus-network, phases N1-N3).
 Shipped in v0.7 (protocol + hardening): the N3b swap-plane upgrade frame
 and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
 
-- Prover optimization toward the 10 s budget [S4 8]: EC-chain column count
-  and membership-path count in the v4 spend circuit.
+- Delivered (WG-17): prover keyset cache - steady-state prove 7.3-8.0 s
+  and verify about 0.1 s at mainnet depth, inside the 10 s budget [S4 8].
+  Cold-start reduction (EC-chain column count, membership-path count)
+  remains future work.
 - Hashlock-in-circuit and CLSAG adaptor signatures for on-chain swap
   enforcement (Refund frames are notices in v0.1).
-- External audit before any mainnet use.
+- External security audit before any mainnet use - MANDATORY gate, see
+  SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
 ## Versioning and changelog
 

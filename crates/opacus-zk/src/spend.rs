@@ -76,7 +76,7 @@
 //! # Row budget
 //!
 //! The full MAX topology at mainnet depth (2^32 leaves, DEPTH = 32) uses
-//! `rows_needed(32) = 5006` rows, well inside the k = 13 budget of [S4 8]
+//! `rows_needed(32) = 5103` rows, well inside the k = 13 budget of [S4 8]
 //! (8192 rows). The wallet topology (1-in / 2-out) at DEPTH = 4 (tests)
 //! fits k = 11.
 

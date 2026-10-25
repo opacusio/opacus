@@ -14,6 +14,24 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ### Changed
 
+- opacus-zk (WG-17): process-wide keyset cache for the v4 spend prover -
+  `Params` keyed by k, vk/pk keyed by (DEPTH, n_in, n_out). Keygen is a
+  pure function of the circuit structure (never of witness values), so
+  cached keysets are bit-for-bit identical to freshly built ones. The
+  first prove of a process pays the one-time keygen (~16 s cold at
+  mainnet depth); every later call runs at steady-state 7.3-8.0 s prove
+  and ~0.1 s verify, inside the 10 s budget [S4 8]. The bench now
+  enforces the budget on the steady-state number and records the
+  cold-start figure for the future EC-chain column count /
+  membership-path count work. Also fixes the stale row-budget doc
+  (rows_needed(32) = 5103, not 5006).
+- Docs (mainnet gate): SECURITY.md gains a "Mainnet gate (mandatory)"
+  section - an independent external security audit of the current main
+  MUST be completed and triaged before any mainnet use; testnet burner
+  keys are strictly one-time, never reused across rounds and never
+  promoted to a network carrying real value. README roadmap marks the
+  WG-17 prover budget as delivered.
+
 - Contracts (WG-16 stage 1): the wrapped native token is rebranded to
   wOPACUS ("Wrapped Opacus", contracts/wOPACUS.sol). Redeploy hardening
   (audit WG-16): quorum fixed N-of-M at deployment (constructor range

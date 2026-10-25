@@ -49,6 +49,22 @@ targets below are best-effort commitments, not guarantees:
 Reporters are credited by default (GitHub advisory credit and release
 notes); say so in your report if you prefer to remain anonymous.
 
+## Mainnet gate (mandatory)
+
+Mainnet access is gated on an external security audit. Before any
+mainnet use of the protocol, the contracts or the tooling, an
+independent third-party audit of the current `main` MUST be completed
+and its findings triaged; internal self-review does not satisfy this
+gate. The audit report (or its redacted summary) ships with the first
+mainnet release.
+
+Testnet credentials are strictly one-time. Burner keys are generated
+per deployment round, never reused across rounds, never shared across
+networks and never funded with anything but faucet tokens. Any key
+that has touched a testnet MUST be treated as burned: it is never
+promoted to a network carrying real value and never derived from, or
+derived into, any other key.
+
 ## Scope
 
 In scope:

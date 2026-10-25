@@ -120,11 +120,104 @@ pub fn mock_verify_v4<const DEPTH: usize>(
 mod real {
     use super::*;
     use halo2_proofs::plonk::{
-        self, create_proof, keygen_pk, keygen_vk, verify_proof, SingleVerifier,
+        self, create_proof, keygen_pk, keygen_vk, verify_proof, ProvingKey, SingleVerifier,
+        VerifyingKey,
     };
     use halo2_proofs::poly::commitment::Params;
     use halo2_proofs::transcript::{Blake2bRead, Blake2bWrite, Challenge255};
     use rand::rngs::OsRng;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    // -----------------------------------------------------------------------
+    // Process-wide keyset cache (WG-17, the [S4 8] 10 s budget item).
+    //
+    // Keygen is a pure function of the circuit STRUCTURE: fixed-column
+    // assignments, selector enablement and copy constraints are wired by the
+    // enabled topology `(n_in, n_out)` - never by witness values. The
+    // delivery suite already relies on exactly this: `verify_v4` derives its
+    // vk from a zero-witness synthesis and validates proofs produced from a
+    // real-witness keygen bit-for-bit. Caching keysets therefore cannot
+    // change a single proof byte; it only removes the per-call rebuild of
+    // `Params` (k), `VerifyingKey` and `ProvingKey`, which the phase split
+    // measured at ~53 % of prove and ~99 % of verify wall time on the
+    // reference machine.
+    //
+    // Locking discipline: the global cache mutex guards map lookups/inserts
+    // ONLY. vk keygen runs outside the global lock (first-wins insert; a
+    // racing duplicate build is discarded). pk keygen runs under the
+    // entry-local pk mutex, so only proves of the SAME topology contend.
+    struct V4KeyCache {
+        params: HashMap<usize, Arc<Params<vesta::Affine>>>,
+        keys: HashMap<(usize, usize, usize), Arc<TopologyKeys>>,
+    }
+
+    struct TopologyKeys {
+        vk: VerifyingKey<vesta::Affine>,
+        pk: Mutex<Option<Arc<ProvingKey<vesta::Affine>>>>,
+    }
+
+    static V4_CACHE: OnceLock<Mutex<V4KeyCache>> = OnceLock::new();
+
+    fn v4_cache() -> &'static Mutex<V4KeyCache> {
+        V4_CACHE.get_or_init(|| {
+            Mutex::new(V4KeyCache {
+                params: HashMap::new(),
+                keys: HashMap::new(),
+            })
+        })
+    }
+
+    fn cached_params(k: u32) -> Arc<Params<vesta::Affine>> {
+        let mut cache = v4_cache().lock().expect("v4 keyset cache poisoned");
+        Arc::clone(
+            cache
+                .params
+                .entry(k as usize)
+                .or_insert_with(|| Arc::new(Params::<vesta::Affine>::new(k))),
+        )
+    }
+
+    fn get_or_build_vk<const DEPTH: usize>(
+        params: &Params<vesta::Affine>,
+        circuit: &V4SpendCircuit<DEPTH>,
+        n_in: usize,
+        n_out: usize,
+    ) -> Result<Arc<TopologyKeys>, plonk::Error> {
+        let key = (DEPTH, n_in, n_out);
+        if let Some(entry) = v4_cache()
+            .lock()
+            .expect("v4 keyset cache poisoned")
+            .keys
+            .get(&key)
+        {
+            return Ok(Arc::clone(entry));
+        }
+        // Slow path OUTSIDE the global lock: first-wins on insert, a racing
+        // duplicate vk build is simply discarded.
+        let vk = keygen_vk(params, circuit)?;
+        let mut cache = v4_cache().lock().expect("v4 keyset cache poisoned");
+        Ok(Arc::clone(cache.keys.entry(key).or_insert_with(|| {
+            Arc::new(TopologyKeys {
+                vk,
+                pk: Mutex::new(None),
+            })
+        })))
+    }
+
+    fn cached_pk<const DEPTH: usize>(
+        params: &Params<vesta::Affine>,
+        entry: &TopologyKeys,
+        circuit: &V4SpendCircuit<DEPTH>,
+    ) -> Result<Arc<ProvingKey<vesta::Affine>>, plonk::Error> {
+        let mut slot = entry.pk.lock().expect("v4 pk slot poisoned");
+        if let Some(pk) = slot.as_ref() {
+            return Ok(Arc::clone(pk));
+        }
+        let pk = Arc::new(keygen_pk(params, entry.vk.clone(), circuit)?);
+        *slot = Some(Arc::clone(&pk));
+        Ok(pk)
+    }
 
     /// A completed v4 spend proof: raw IPA proof bytes over the 15-slot
     /// instance column. The instances are NOT repeated here on purpose:
@@ -138,6 +231,13 @@ mod real {
     /// Keygen + prove a v4 spend [S4 8]. `n_in`/`n_out` are the ENABLED
     /// topology (1..=MAX_IN / 1..=MAX_OUT); `instances` is the normative
     /// 15-slot vector ([`spend_instances`]).
+    ///
+    /// Keysets (`Params`, vk, pk) are served from the process-wide cache
+    /// ([`v4_cache`]) keyed by `(k)` and `(DEPTH, n_in, n_out)`: the FIRST
+    /// call of a process pays the full keygen, every later call (wallet
+    /// session, node daemon) proves at steady-state cost. Proofs are
+    /// bit-for-bit the same construction as an uncached build - only
+    /// transcript blinding randomness (OsRng) differs, as before.
     pub fn prove_v4<const DEPTH: usize>(
         witness: &crate::spend::SpendWitness,
         r_in: &[Fq],
@@ -162,9 +262,9 @@ mod real {
             corrupt_leaf: None,
         };
         let k = V4SpendCircuit::<DEPTH>::required_k();
-        let params = Params::<vesta::Affine>::new(k);
-        let vk = keygen_vk(&params, &circuit)?;
-        let pk = keygen_pk(&params, vk, &circuit)?;
+        let params = cached_params(k);
+        let entry = get_or_build_vk(&params, &circuit, n_in, n_out)?;
+        let pk = cached_pk(&params, &entry, &circuit)?;
         let mut transcript = Blake2bWrite::<_, vesta::Affine, Challenge255<_>>::init(Vec::new());
         create_proof::<
             vesta::Affine,
@@ -189,6 +289,10 @@ mod real {
     /// transaction fields [S4 9 step 2]. The verification circuit is built
     /// witness-less with the SAME enabled topology the prover used, so the
     /// derived verifying key matches bit-for-bit.
+    ///
+    /// Params and vk are served from the process-wide cache (see
+    /// [`prove_v4`]); steady-state verification drops to the pure
+    /// `verify_proof` cost (measured ~0.07 s at k = 13).
     pub fn verify_v4<const DEPTH: usize>(
         proof: &[u8],
         instances: &[Fp],
@@ -211,13 +315,13 @@ mod real {
             corrupt_leaf: None,
         };
         let k = V4SpendCircuit::<DEPTH>::required_k();
-        let params = Params::<vesta::Affine>::new(k);
-        let vk = keygen_vk(&params, &circuit)?;
+        let params = cached_params(k);
+        let entry = get_or_build_vk(&params, &circuit, n_in, n_out)?;
         let mut transcript = Blake2bRead::<_, vesta::Affine, Challenge255<_>>::init(proof);
         let strategy = SingleVerifier::new(&params);
         verify_proof::<vesta::Affine, Challenge255<vesta::Affine>, _, _>(
             &params,
-            &vk,
+            &entry.vk,
             strategy,
             &[&[instances]],
             &mut transcript,
