@@ -29,6 +29,14 @@
 //! accepted transcript tags; a repeated tag is rejected. (A TTL-based
 //! window is queued as hardening; the bounded window already bounds memory
 //! and rejects in-practice replays.)
+//!
+//! Transport (Net-1): the handshake itself stays cleartext (only identity
+//! keys and proofs cross it), but it now also derives the post-auth
+//! transport keys: a static-static ECDH over the DLEq-bound identity keys,
+//! bound to the verified transcript, with separate initiator->responder
+//! and responder->initiator directions. Every post-auth frame is sealed
+//! mac || ciphertext under the per-direction keys with a strictly
+//! sequential per-direction counter (see `SessionKeys`).
 
 use std::collections::{HashSet, VecDeque};
 
@@ -50,8 +58,10 @@ pub const NET_PROTOCOL: &str = "opacus-net-v1";
 pub const NET_AUTH_TAG: &[u8] = b"opacus-net-auth-v1";
 /// Domain tag of the transcript-binding Schnorr challenge.
 const SIG_TAG: &[u8] = b"opacus-net-auth-sig-v1";
-/// Current handshake version.
-pub const HANDSHAKE_VERSION: u32 = 1;
+/// Current handshake version. v2 (Net-1): post-auth frames are
+/// transport-encrypted, so a v1 peer is rejected right at Hello with a
+/// clean BadVersion instead of failing on the first post-auth frame.
+pub const HANDSHAKE_VERSION: u32 = 2;
 /// Default replay-window size (accepted transcript tags per host).
 pub const REPLAY_CACHE_CAP: usize = 1024;
 /// Hard cap for one incoming network frame (prefix + body).
@@ -84,6 +94,10 @@ pub enum HandshakeError {
     TooLarge(usize),
     DiscoTooLarge(usize),
     NotesTooLarge(usize),
+    /// Post-auth transport failure (Net-1): MAC mismatch, a sealed body
+    /// shorter than the MAC, or any other sealed-frame violation. The
+    /// connection MUST be closed.
+    BadTransport(String),
 }
 
 impl std::fmt::Display for HandshakeError {
@@ -105,6 +119,7 @@ impl std::fmt::Display for HandshakeError {
             HandshakeError::NotesTooLarge(n) => {
                 write!(f, "notes frame carries {n} blobs, cap {}", NOTES_MAX_COUNT)
             }
+            HandshakeError::BadTransport(m) => write!(f, "transport: {m}"),
         }
     }
 }
@@ -457,6 +472,132 @@ impl AuthMsg {
 }
 
 // ---------------------------------------------------------------------------
+// Post-auth transport keys (Net-1)
+// ---------------------------------------------------------------------------
+
+/// Domain tag of the per-direction encryption key derivation.
+const TK_ENC_TAG: &str = "opacus-net-tk-v1 enc";
+/// Domain tag of the per-direction MAC key derivation.
+const TK_MAC_TAG: &str = "opacus-net-tk-v1 mac";
+/// Domain tag of one keystream block.
+const TK_KS_TAG: &[u8] = b"opacus-net-tk-v1 ks";
+/// Domain tag of the frame MAC.
+const TK_FRAME_MAC_TAG: &[u8] = b"opacus-net-tk-v1 frame-mac";
+/// Length of one sealed frame's MAC (carried at the head of the body).
+pub const TRANSPORT_MAC_LEN: usize = 32;
+
+/// One direction's transport keys.
+#[derive(Clone)]
+pub struct DirKeys {
+    enc: [u8; 32],
+    mac: [u8; 32],
+}
+
+/// Post-auth transport keys (Net-1): the session secret is a
+/// static-static ECDH over the DLEq-bound identity keys
+/// (`sk_local * pr_peer` - only the two proven key holders can compute
+/// it), bound to the verified handshake transcript. Each direction has
+/// its own encryption + MAC keys. Construction family: the note ECIES
+/// (keyed blake3 MAC verified BEFORE any decryption, blake3-keystream
+/// encryption) - no new dependencies.
+#[derive(Clone)]
+pub struct SessionKeys {
+    tx: DirKeys,
+    rx: DirKeys,
+}
+
+impl SessionKeys {
+    /// Derive both directions from the verified handshake. `role`
+    /// selects which direction is ours; `peer` must be the VERIFIED
+    /// peer (its `pr` was proven by the Auth proof).
+    pub fn derive(
+        role: Role,
+        id: &NodeIdentity,
+        peer: &VerifiedPeer,
+        transcript: &[u8],
+    ) -> Result<SessionKeys, HandshakeError> {
+        let peer_point = peer.pr.decompress().ok_or(HandshakeError::BadProof)?;
+        let shared = id.secret() * peer_point;
+        let mut base = Vec::with_capacity(64 + transcript.len());
+        base.extend_from_slice(NET_AUTH_TAG);
+        base.extend_from_slice(shared.compress().as_bytes());
+        base.extend_from_slice(transcript);
+        let (tx, rx) = match role {
+            Role::Initiator => (dir_keys(&base, "i2r"), dir_keys(&base, "r2i")),
+            Role::Responder => (dir_keys(&base, "r2i"), dir_keys(&base, "i2r")),
+        };
+        Ok(SessionKeys { tx, rx })
+    }
+
+    /// Seal one outbound frame at the strictly increasing tx counter:
+    /// body = mac(32) || ciphertext. The MAC covers the counter, so
+    /// frames cannot be reordered, replayed or spliced across sequences.
+    pub fn seal(&self, seq: u64, plaintext: &[u8]) -> Vec<u8> {
+        let mut ct = Vec::with_capacity(plaintext.len());
+        for (i, chunk) in plaintext.chunks(32).enumerate() {
+            let ks = keystream_block(&self.tx.enc, seq, i as u64);
+            ct.extend(chunk.iter().zip(ks.iter()).map(|(p, k)| p ^ k));
+        }
+        let mac = blake3::keyed_hash(
+            &self.tx.mac,
+            &[TK_FRAME_MAC_TAG, &seq.to_le_bytes(), &ct].concat(),
+        );
+        let mut body = Vec::with_capacity(TRANSPORT_MAC_LEN + ct.len());
+        body.extend_from_slice(mac.as_bytes());
+        body.extend_from_slice(&ct);
+        body
+    }
+
+    /// Open one inbound frame body at the expected rx counter. The MAC
+    /// is verified (constant-time via blake3::Hash equality) BEFORE any
+    /// decryption; a mismatch means tampering, reordering or replay -
+    /// the connection must be closed.
+    pub fn open(&self, seq: u64, body: &[u8]) -> Result<Vec<u8>, HandshakeError> {
+        if body.len() < TRANSPORT_MAC_LEN {
+            return Err(HandshakeError::BadTransport(format!(
+                "sealed frame is {} bytes, shorter than the MAC",
+                body.len()
+            )));
+        }
+        let (mac_b, ct) = body.split_at(TRANSPORT_MAC_LEN);
+        let want = blake3::keyed_hash(
+            &self.rx.mac,
+            &[TK_FRAME_MAC_TAG, &seq.to_le_bytes(), ct].concat(),
+        );
+        let got = blake3::Hash::from_bytes(mac_b.try_into().expect("32 bytes"));
+        if got != want {
+            return Err(HandshakeError::BadTransport(format!(
+                "frame MAC mismatch at seq {seq}"
+            )));
+        }
+        let mut pt = Vec::with_capacity(ct.len());
+        for (i, chunk) in ct.chunks(32).enumerate() {
+            let ks = keystream_block(&self.rx.enc, seq, i as u64);
+            pt.extend(chunk.iter().zip(ks.iter()).map(|(c, k)| c ^ k));
+        }
+        Ok(pt)
+    }
+}
+
+/// Per-direction keys: two independent blake3::derive_key expansions of
+/// the shared base under direction-separated contexts.
+fn dir_keys(base: &[u8], dir: &str) -> DirKeys {
+    let enc = blake3::derive_key(&format!("{TK_ENC_TAG} {dir}"), base);
+    let mac = blake3::derive_key(&format!("{TK_MAC_TAG} {dir}"), base);
+    DirKeys { enc, mac }
+}
+
+/// One 32-byte keystream block: keyed hash over the tag, the sequence
+/// and the block index (the same construction as the note keystream).
+fn keystream_block(key: &[u8; 32], seq: u64, block: u64) -> [u8; 32] {
+    let mut data = Vec::with_capacity(TK_KS_TAG.len() + 16);
+    data.extend_from_slice(TK_KS_TAG);
+    data.extend_from_slice(&seq.to_le_bytes());
+    data.extend_from_slice(&block.to_le_bytes());
+    *blake3::keyed_hash(key, &data).as_bytes()
+}
+
+// ---------------------------------------------------------------------------
 // Replay window
 // ---------------------------------------------------------------------------
 
@@ -609,6 +750,16 @@ impl HandshakeSide {
         auth.verify_against(&pe, &pr, t)?;
         cache.check_and_insert(&transcript_tag(t))?;
         Ok(VerifiedPeer { node_id, pe, pr })
+    }
+
+    /// Net-1: derive the post-auth transport keys for THIS side. `peer`
+    /// must be the value returned by verify_auth (the proven identity).
+    pub fn session_keys(&self, peer: &VerifiedPeer) -> Result<SessionKeys, HandshakeError> {
+        let t = self
+            .transcript
+            .as_ref()
+            .ok_or_else(|| HandshakeError::Malformed("no peer hello yet".to_string()))?;
+        SessionKeys::derive(self.role, &self.id, peer, t)
     }
 }
 
@@ -942,10 +1093,10 @@ mod tests {
         let (mut r, _) = HandshakeSide::start(Role::Responder, &NodeIdentity::generate());
         let id = NodeIdentity::generate();
         let mut hello = Hello::build(&id, &[4u8; 32]);
-        hello.version = 2;
+        hello.version = HANDSHAKE_VERSION + 1;
         assert_eq!(
             r.on_peer_hello(&hello).unwrap_err(),
-            HandshakeError::BadVersion(2)
+            HandshakeError::BadVersion(HANDSHAKE_VERSION + 1)
         );
     }
 
@@ -989,5 +1140,99 @@ mod tests {
         }
         assert_eq!(cache_c.len(), 100);
         assert_eq!(cache_r.len(), 100);
+    }
+
+    // ---- Net-1: post-auth transport keys -----------------------------
+
+    #[test]
+    fn transport_keys_cross_open() {
+        let (c, r) = pair();
+        let mut cache_c = ReplayCache::new(REPLAY_CACHE_CAP);
+        let mut cache_r = ReplayCache::new(REPLAY_CACHE_CAP);
+        let auth_r = r.produce_auth().unwrap();
+        let vp_at_c = c.verify_auth(&auth_r, &mut cache_c).unwrap();
+        let auth_c = c.produce_auth().unwrap();
+        let vp_at_r = r.verify_auth(&auth_c, &mut cache_r).unwrap();
+
+        let kc = c.session_keys(&vp_at_c).unwrap();
+        let kr = r.session_keys(&vp_at_r).unwrap();
+
+        // initiator -> responder at the same counter round-trips
+        let pt = b"disco batch over the encrypted transport";
+        let body = kc.seal(0, pt);
+        assert_eq!(kr.open(0, &body).unwrap(), pt);
+        // responder -> initiator likewise, at a different counter
+        let body = kr.seal(7, pt);
+        assert_eq!(kc.open(7, &body).unwrap(), pt);
+        // directions are separated: the same (seq, plaintext) seals
+        // differently per direction
+        assert_ne!(kc.seal(0, pt), kr.seal(0, pt));
+    }
+
+    #[test]
+    fn sealed_frame_binds_seq_and_content() {
+        let (c, r) = pair();
+        let mut cache_c = ReplayCache::new(REPLAY_CACHE_CAP);
+        let mut cache_r = ReplayCache::new(REPLAY_CACHE_CAP);
+        let auth_r = r.produce_auth().unwrap();
+        let vp_at_c = c.verify_auth(&auth_r, &mut cache_c).unwrap();
+        let auth_c = c.produce_auth().unwrap();
+        let vp_at_r = r.verify_auth(&auth_c, &mut cache_r).unwrap();
+        let kc = c.session_keys(&vp_at_c).unwrap();
+        let kr = r.session_keys(&vp_at_r).unwrap();
+
+        let pt: Vec<u8> = (0..1000u32).map(|i| (i % 251) as u8).collect();
+        // multi-block round-trip
+        let body = kc.seal(0, &pt);
+        assert_eq!(kr.open(0, &body).unwrap(), pt);
+
+        // the same plaintext under different counters seals differently
+        let body1 = kc.seal(1, &pt);
+        assert_ne!(body, body1);
+
+        // a flipped ciphertext bit breaks the MAC (checked before any
+        // decryption)
+        let mut tampered = body.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        let err = kr.open(0, &tampered).unwrap_err();
+        assert!(matches!(err, HandshakeError::BadTransport(_)));
+
+        // a flipped MAC bit is rejected as well
+        let mut tampered_mac = body.clone();
+        tampered_mac[0] ^= 0x01;
+        assert!(matches!(
+            kr.open(0, &tampered_mac).unwrap_err(),
+            HandshakeError::BadTransport(_)
+        ));
+
+        // the counter is bound: opening at the wrong seq fails
+        assert!(matches!(
+            kr.open(1, &body).unwrap_err(),
+            HandshakeError::BadTransport(_)
+        ));
+
+        // a body shorter than the MAC is rejected structurally
+        assert!(matches!(
+            kr.open(0, &[0u8; 8]).unwrap_err(),
+            HandshakeError::BadTransport(_)
+        ));
+    }
+
+    #[test]
+    fn transport_keys_reject_invalid_peer_point() {
+        // the Hello node_id check does not prove point validity; the
+        // key derivation must fail cleanly on a non-ristretto peer key
+        let id = NodeIdentity::generate();
+        let vp = VerifiedPeer {
+            node_id: [9u8; 16],
+            pe: id.pe,
+            pr: CompressedRistretto([0xffu8; 32]),
+        };
+        let err = match SessionKeys::derive(Role::Initiator, &id, &vp, &[0u8; 64]) {
+            Err(e) => e,
+            Ok(_) => panic!("a non-ristretto peer key must fail the derivation"),
+        };
+        assert_eq!(err, HandshakeError::BadProof);
     }
 }

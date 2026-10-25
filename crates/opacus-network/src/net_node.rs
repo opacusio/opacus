@@ -26,7 +26,15 @@
 //!   `MAX_NET_FRAME`, closing the N1 backlog item on read_frame caps);
 //! * the swap plane (N3b): a post-auth `Upgrade` frame hands the raw
 //!   connection to the attached swap node; without an attachment every
-//!   Upgrade is rejected and the connection closed.
+//!   Upgrade is rejected and the connection closed;
+//! * post-auth frames are transport-encrypted (Net-1): the handshake
+//!   derives per-direction keys from a static-static ECDH over the
+//!   DLEq-bound identity keys bound to the transcript; every sealed
+//!   frame is mac(32) || ciphertext with a strictly sequential
+//!   per-direction counter - tampering, replay and reordering close
+//!   the connection. The Upgrade handover is the boundary: the net
+//!   plane's last frame (Upgrade) is sealed, the adopted raw socket
+//!   then speaks the swap protocol as before.
 //!
 //! std-only, thread-per-connection, mirroring `swap_node.rs` (opacusd
 //! embeds this node through `opacus_node::net_service`).
@@ -40,7 +48,8 @@ use std::time::Duration;
 
 use crate::handshake::{
     decode_net_frame, encode_net_frame, DiscoPeer, HandshakeError, HandshakeSide, NetMsg,
-    ReplayCache, Role, VerifiedPeer, DISCO_MAX_PEERS, MAX_NET_FRAME, REPLAY_CACHE_CAP,
+    ReplayCache, Role, SessionKeys, VerifiedPeer, DISCO_MAX_PEERS, MAX_NET_FRAME, REPLAY_CACHE_CAP,
+    TRANSPORT_MAC_LEN,
 };
 use crate::identity::NodeIdentity;
 use crate::notes::{note_id_hex_of, NoteBlob, NoteInbox, NOTES_MAX_COUNT, NOTE_INBOX_CAP};
@@ -208,8 +217,9 @@ pub struct NetNode {
     listener: TcpListener,
     store: Arc<Mutex<PeerStore>>,
     cache: Arc<Mutex<ReplayCache>>,
-    /// Authenticated connections: hex node_id -> write half.
-    conns: Arc<Mutex<HashMap<String, TcpStream>>>,
+    /// Authenticated connections: hex node_id -> outbound state
+    /// (write half + tx transport keys + counter, Net-1).
+    conns: Arc<Mutex<HashMap<String, Arc<Mutex<ConnOut>>>>>,
     /// Received (still sealed) note blobs, bounded and deduped by id.
     notes: Arc<Mutex<NoteInbox>>,
     /// Optional swap-plane target of Upgrade handovers (N3b). `None`
@@ -219,6 +229,17 @@ pub struct NetNode {
     /// by MAX_HALF_OPEN (audit H-01).
     half_open: Arc<std::sync::atomic::AtomicUsize>,
     events: Arc<Mutex<Vec<NetEvent>>>,
+}
+
+/// Post-auth outbound state of one connection (Net-1): the write half,
+/// OUR tx-direction transport keys and the strictly increasing tx
+/// counter. The mutex serializes concurrent writers (send_notes,
+/// relay_notes, the conn thread's own frames) so sealed frames never
+/// interleave mid-write and both rx counters stay in lockstep.
+struct ConnOut {
+    stream: TcpStream,
+    keys: SessionKeys,
+    tx_seq: u64,
 }
 
 impl NetNode {
@@ -313,48 +334,52 @@ impl NetNode {
                 notes.len(),
             )));
         }
-        let mut stream = {
-            let conns = self.conns.lock().unwrap();
-            match conns.get(node_id_hex) {
-                Some(s) => s.try_clone()?,
-                None => {
-                    return Err(NetNodeError::Io(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        format!("peer {node_id_hex} is not connected"),
-                    )))
-                }
-            }
-        };
-        write_net_frame(
-            &mut stream,
+        self.send_frame(
+            node_id_hex,
             &NetMsg::Notes {
                 notes: notes.to_vec(),
             },
         )
     }
 
+    /// Net-1: seal + send one frame to an authenticated peer through
+    /// its conns entry (the entry carries the tx keys and the counter).
+    fn send_frame(&self, peer_hex: &str, msg: &NetMsg) -> Result<(), NetNodeError> {
+        let out = {
+            let conns = self.conns.lock().unwrap();
+            conns.get(peer_hex).cloned()
+        }
+        .ok_or_else(|| {
+            NetNodeError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("peer {peer_hex} is not connected"),
+            ))
+        })?;
+        write_conn_frame(&out, msg)
+    }
+
     /// Relay a batch of note blobs to every authenticated peer except the
     /// sender. Delivery failures never fail the caller (they only drop
     /// the dead connection).
     fn relay_notes(&self, from_hex: &str, notes: &[NoteBlob]) -> usize {
-        let targets: Vec<(String, TcpStream)> = {
+        let targets: Vec<(String, Arc<Mutex<ConnOut>>)> = {
             let conns = self.conns.lock().unwrap();
             conns
                 .iter()
                 .filter(|(id, _)| id.as_str() != from_hex)
-                .filter_map(|(id, s)| s.try_clone().ok().map(|c| (id.clone(), c)))
+                .map(|(id, o)| (id.clone(), Arc::clone(o)))
                 .collect()
         };
         let mut ok = 0usize;
-        for (id, mut s) in targets {
-            match write_net_frame(
-                &mut s,
+        for (id, out) in &targets {
+            match write_conn_frame(
+                out,
                 &NetMsg::Notes {
                     notes: notes.to_vec(),
                 },
             ) {
                 Ok(()) => ok += 1,
-                Err(_) => self.drop_conn(&id),
+                Err(_) => self.drop_conn(id),
             }
         }
         ok * notes.len()
@@ -478,6 +503,42 @@ fn write_net_frame(stream: &mut TcpStream, msg: &NetMsg) -> Result<(), NetNodeEr
     Ok(())
 }
 
+/// Net-1: read one sealed post-auth frame ([u32-LE body_len]
+/// [mac(32) || ct]) and open it under the rx direction at the strictly
+/// sequential rx counter, then decode the plaintext net frame. The
+/// counter advances only on a fully verified frame, so tampering,
+/// replay and reordering all surface as transport rejections.
+fn read_sealed_frame(
+    stream: &mut TcpStream,
+    keys: &SessionKeys,
+    rx_seq: &mut u64,
+    max_body: usize,
+) -> Result<Option<NetMsg>, NetNodeError> {
+    let wire = match read_net_frame(stream, max_body)? {
+        Some(w) => w,
+        None => return Ok(None),
+    };
+    let plain = keys.open(*rx_seq, &wire[4..])?;
+    *rx_seq += 1;
+    Ok(Some(decode_net_frame(&plain)?))
+}
+
+/// Net-1: seal + write one post-auth frame under the connection's tx
+/// direction at the connection's strictly increasing tx counter (the
+/// per-connection mutex keeps concurrent writers ordered).
+fn write_conn_frame(out: &Mutex<ConnOut>, msg: &NetMsg) -> Result<(), NetNodeError> {
+    let mut c = out.lock().unwrap();
+    let pt = encode_net_frame(msg)?;
+    let body = c.keys.seal(c.tx_seq, &pt);
+    let mut wire = Vec::with_capacity(4 + body.len());
+    wire.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    wire.extend_from_slice(&body);
+    c.stream.write_all(&wire)?;
+    c.stream.flush()?;
+    c.tx_seq += 1;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Per-connection flow: handshake (strict single-shot) -> disco -> keep-alive
 // ---------------------------------------------------------------------------
@@ -513,7 +574,7 @@ impl NetNode {
         } else {
             self.handshake_phase(&mut stream, role)
         };
-        let (vp, batch) = match handshake_result {
+        let (vp, batch, keys) = match handshake_result {
             Ok(ok) => ok,
             Err(e) => {
                 self.log(NetEvent::Rejected {
@@ -545,7 +606,7 @@ impl NetNode {
                 return;
             }
         };
-        {
+        let out = {
             let mut conns = self.conns.lock().unwrap();
             let established = conns.len();
             if established >= self.cfg.max_conns {
@@ -564,8 +625,14 @@ impl NetNode {
                 });
                 return;
             }
-            conns.insert(peer_hex.clone(), half);
-        }
+            let out = Arc::new(Mutex::new(ConnOut {
+                stream: half,
+                keys: keys.clone(),
+                tx_seq: 0,
+            }));
+            conns.insert(peer_hex.clone(), Arc::clone(&out));
+            out
+        };
         self.log(NetEvent::Authenticated {
             node_id: peer_hex.clone(),
             addr: peer_addr.clone(),
@@ -580,9 +647,9 @@ impl NetNode {
             let _ = st.save();
         }
 
-        // Disco exchange: both sides push one bounded batch, then read the
-        // peer's batch in the keep-alive loop below.
-        if let Err(e) = write_net_frame(&mut stream, &NetMsg::Disco { peers: batch }) {
+        // Disco exchange (Net-1: sealed): both sides push one bounded
+        // batch, then read the peer's batch in the keep-alive loop below.
+        if let Err(e) = write_conn_frame(&out, &NetMsg::Disco { peers: batch }) {
             self.drop_conn(&peer_hex);
             self.log(NetEvent::Rejected {
                 addr: peer_addr,
@@ -590,11 +657,21 @@ impl NetNode {
             });
             return;
         }
+        // Net-1: rx side of the transport - frames arrive as
+        // [u32-LE body_len][mac(32) || ct]; the rx counter is implicit
+        // and strictly sequential, so replay, reordering and drops are
+        // all transport failures and close the connection.
+        let mut rx_seq: u64 = 0;
         loop {
-            match read_net_frame(&mut stream, self.cfg.max_frame_len) {
+            match read_sealed_frame(
+                &mut stream,
+                &keys,
+                &mut rx_seq,
+                self.cfg.max_frame_len + TRANSPORT_MAC_LEN,
+            ) {
                 Ok(None) => break,
-                Ok(Some(wire)) => match decode_net_frame(&wire) {
-                    Ok(NetMsg::Disco { peers }) => {
+                Ok(Some(msg)) => match msg {
+                    NetMsg::Disco { peers } => {
                         let added = {
                             let mut st = self.store.lock().unwrap();
                             let added =
@@ -607,7 +684,7 @@ impl NetNode {
                             added,
                         });
                     }
-                    Ok(NetMsg::Notes { notes }) => {
+                    NetMsg::Notes { notes } => {
                         let (kept, fresh) = {
                             let mut inbox = self.notes.lock().unwrap();
                             let mut fresh: Vec<NoteBlob> = Vec::new();
@@ -641,7 +718,7 @@ impl NetNode {
                             relayed,
                         });
                     }
-                    Ok(NetMsg::Upgrade { plane }) => {
+                    NetMsg::Upgrade { plane } => {
                         // N3b swap-plane handover: the authenticated
                         // peer asks to move this raw connection to the
                         // attached swap node. Without an attachment
@@ -672,7 +749,7 @@ impl NetNode {
                         }
                         return;
                     }
-                    Ok(other) => {
+                    other => {
                         // strict single-shot (audit F5): after the
                         // handshake only Disco, Notes and the N3b
                         // Upgrade handover are accepted
@@ -680,14 +757,6 @@ impl NetNode {
                         self.log(NetEvent::Rejected {
                             addr: peer_addr,
                             reason: format!("unexpected {} frame after handshake", kind_of(&other)),
-                        });
-                        return;
-                    }
-                    Err(e) => {
-                        self.drop_conn(&peer_hex);
-                        self.log(NetEvent::Rejected {
-                            addr: peer_addr,
-                            reason: e.to_string(),
                         });
                         return;
                     }
@@ -725,7 +794,7 @@ impl NetNode {
         &self,
         stream: &mut TcpStream,
         role: Role,
-    ) -> Result<(VerifiedPeer, Vec<DiscoPeer>), NetNodeError> {
+    ) -> Result<(VerifiedPeer, Vec<DiscoPeer>, SessionKeys), NetNodeError> {
         let (mut side, hello) = HandshakeSide::start(role, &self.identity);
 
         let read_msg = |stream: &mut TcpStream| -> Result<NetMsg, NetNodeError> {
@@ -769,7 +838,8 @@ impl NetNode {
                 };
                 let my_auth = side.produce_auth()?;
                 write_net_frame(stream, &NetMsg::Auth { auth: my_auth })?;
-                Ok((vp, self.our_batch()))
+                let keys = side.session_keys(&vp)?;
+                Ok((vp, self.our_batch(), keys))
             }
             Role::Responder => {
                 let peer_hello = match read_msg(stream)? {
@@ -800,7 +870,8 @@ impl NetNode {
                     let mut cache = self.cache.lock().unwrap();
                     side.verify_auth(&peer_auth, &mut cache)?
                 };
-                Ok((vp, self.our_batch()))
+                let keys = side.session_keys(&vp)?;
+                Ok((vp, self.our_batch(), keys))
             }
         }
     }
@@ -850,7 +921,7 @@ mod tests {
     /// Manually run the initiator flow on a raw stream (test helper): the
     /// responder completes its handshake, but this stream sends no Disco
     /// batch, so the caller stays in full control of what is written next.
-    fn raw_dial_handshake_only(addr: &str) -> TcpStream {
+    fn raw_dial_handshake_only(addr: &str) -> (TcpStream, SessionKeys) {
         let id = NodeIdentity::generate();
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.set_nodelay(true).ok();
@@ -868,10 +939,22 @@ mod tests {
             other => panic!("expected Auth, got {}", kind_of(&other)),
         };
         let mut cache = ReplayCache::new(16);
-        let _vp = side.verify_auth(&peer_auth, &mut cache).unwrap();
+        let vp = side.verify_auth(&peer_auth, &mut cache).unwrap();
         let my_auth = side.produce_auth().unwrap();
         write_net_frame(&mut stream, &NetMsg::Auth { auth: my_auth }).unwrap();
-        stream
+        let keys = side.session_keys(&vp).unwrap();
+        (stream, keys)
+    }
+
+    /// Net-1 test helper: seal + write one frame at the given test-side
+    /// counter (mirrors what the real initiator thread does).
+    fn write_sealed_test_frame(s: &mut TcpStream, keys: &SessionKeys, seq: u64, msg: &NetMsg) {
+        let body = keys.seal(seq, &encode_net_frame(msg).unwrap());
+        let mut wire = Vec::with_capacity(4 + body.len());
+        wire.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        wire.extend_from_slice(&body);
+        s.write_all(&wire).unwrap();
+        s.flush().unwrap();
     }
 
     #[test]
@@ -945,7 +1028,7 @@ mod tests {
         // connection; under the old lock placement this blocked for the
         // whole read timeout (20 s in tests)
         let t0 = Instant::now();
-        let s2 = raw_dial_handshake_only(&addr);
+        let (s2, _keys) = raw_dial_handshake_only(&addr);
         let elapsed = t0.elapsed();
         drop(s2);
         drop(stalled);
@@ -1064,10 +1147,11 @@ mod tests {
     fn second_hello_after_auth_rejected() {
         let b = start_node(2, None);
         let addr = b.local_addr().unwrap().to_string();
-        let mut stream = raw_dial_handshake_only(&addr);
-        // post-handshake: a second Hello frame must kill the connection
+        let (mut stream, keys) = raw_dial_handshake_only(&addr);
+        // post-handshake: a second Hello frame (properly sealed, so it
+        // clears the transport) must still kill the connection
         let hello = Hello::build(&NodeIdentity::generate(), &[7u8; 32]);
-        write_net_frame(&mut stream, &NetMsg::Hello { hello }).unwrap();
+        write_sealed_test_frame(&mut stream, &keys, 0, &NetMsg::Hello { hello });
         wait_until(10, || {
             b.events().iter().any(|e| {
                 matches!(
@@ -1223,6 +1307,33 @@ mod tests {
     }
 
     #[test]
+    fn post_auth_cleartext_frame_rejected() {
+        // Net-1 regression: after the handshake the transport is
+        // encrypted - a cleartext frame fails the MAC and closes the
+        // connection.
+        let b = start_node(6, None);
+        let (mut s, keys) = raw_dial_handshake_only(&b.local_addr().unwrap().to_string());
+        // drain the responder's sealed Disco batch (rx counter 0)
+        let wire = read_net_frame(&mut s, MAX_NET_FRAME + TRANSPORT_MAC_LEN)
+            .unwrap()
+            .unwrap();
+        keys.open(0, &wire[4..]).unwrap();
+        // a CLEARTEXT Disco now: the MAC check must reject it
+        let clear = encode_net_frame(&NetMsg::Disco { peers: vec![] }).unwrap();
+        s.write_all(&(clear.len() as u32).to_le_bytes()).unwrap();
+        s.write_all(&clear).unwrap();
+        s.flush().unwrap();
+        wait_until(10, || {
+            b.events().iter().any(|e| {
+                matches!(
+                    e,
+                    NetEvent::Rejected { reason, .. } if reason.contains("transport")
+                )
+            })
+        });
+    }
+
+    #[test]
     fn upgrade_during_handshake_rejected() {
         let b = start_node(2, None);
         let mut s = TcpStream::connect(b.local_addr().unwrap().to_string()).unwrap();
@@ -1248,14 +1359,15 @@ mod tests {
     #[test]
     fn upgrade_without_swap_plane_rejected() {
         let b = start_node(3, None);
-        let mut s = raw_dial_handshake_only(&b.local_addr().unwrap().to_string());
-        write_net_frame(
+        let (mut s, keys) = raw_dial_handshake_only(&b.local_addr().unwrap().to_string());
+        write_sealed_test_frame(
             &mut s,
+            &keys,
+            0,
             &NetMsg::Upgrade {
                 plane: SWAP_UPGRADE_PLANE.to_string(),
             },
-        )
-        .unwrap();
+        );
         wait_until(10, || {
             b.events().iter().any(|e| {
                 matches!(
@@ -1282,12 +1394,15 @@ mod tests {
         .unwrap();
         b.attach_swap(Arc::clone(&swap));
 
-        let mut s = raw_dial_handshake_only(&b.local_addr().unwrap().to_string());
-        // drain the responder Disco batch BEFORE the upgrade: once the
-        // swap conn_loop owns the socket, a stale control-plane frame
-        // would be read as swap-protocol garbage
-        let wire = read_net_frame(&mut s, MAX_NET_FRAME).unwrap().unwrap();
-        match decode_net_frame(&wire).unwrap() {
+        let (mut s, keys) = raw_dial_handshake_only(&b.local_addr().unwrap().to_string());
+        // drain the responder Disco batch BEFORE the upgrade (it arrives
+        // sealed): once the swap conn_loop owns the socket, a stale
+        // control-plane frame would be read as swap-protocol garbage
+        let wire = read_net_frame(&mut s, MAX_NET_FRAME + TRANSPORT_MAC_LEN)
+            .unwrap()
+            .unwrap();
+        let plain = keys.open(0, &wire[4..]).unwrap();
+        match decode_net_frame(&plain).unwrap() {
             NetMsg::Disco { .. } => {}
             other => panic!(
                 "expected the responder Disco batch, got {}",
@@ -1295,13 +1410,14 @@ mod tests {
             ),
         }
 
-        write_net_frame(
+        write_sealed_test_frame(
             &mut s,
+            &keys,
+            0,
             &NetMsg::Upgrade {
                 plane: SWAP_UPGRADE_PLANE.to_string(),
             },
-        )
-        .unwrap();
+        );
         wait_until(10, || {
             b.events().iter().any(|e| {
                 matches!(

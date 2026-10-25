@@ -101,6 +101,29 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   logged at startup and opacusd gained a --network flag wired into
   DaemonConfig. Regression tests cover the strict validation, the
   normalization and the testnet selection.
+- Security (Net-1): post-auth control-plane frames (Disco, Notes,
+  Upgrade) crossed the wire as cleartext JSON - a passive observer saw
+  the full peer graph and note metadata, and any in-path attacker could
+  read or tamper with every frame after the (authenticated) handshake.
+  The handshake now derives transport keys from a static-static ECDH
+  over the DLEq-bound identity keys (sk_local * pr_peer - a shared
+  secret only the two proven key holders can compute), bound to the
+  verified transcript, with separate initiator->responder and
+  responder->initiator directions. Every post-auth frame is sealed as
+  mac(32) || ciphertext under the per-direction keys (keyed blake3 MAC
+  verified BEFORE any decryption, blake3-keystream encryption - the
+  same construction family as the note ECIES, no new dependencies),
+  and the per-direction frame counters are strictly sequential, so
+  replay, reordering and drops all close the connection. The Upgrade
+  handover stays the boundary: the net plane's last frame (Upgrade) is
+  sealed, the adopted raw socket then speaks the swap protocol as
+  before (swap-plane transport is a separate tracked item). The
+  handshake version bumps to 2, so a v1 peer is rejected at Hello with
+  a clean BadVersion instead of failing on the first post-auth frame.
+  Regression tests cover the cross-side key agreement, the
+  seq/content binding of the seal/open construction and the cleartext
+  rejection at the node level; the existing node-to-node tests now run
+  entirely over the encrypted path.
 
 ## [0.7.0] - 2026-10-23
 
