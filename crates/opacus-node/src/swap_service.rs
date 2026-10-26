@@ -133,6 +133,13 @@ impl SwapService {
         self.node.send_wire(&wire)
     }
 
+    /// WG-18: deadline sweep passthrough - refund every session whose
+    /// protocol deadline passed at the current height and broadcast the
+    /// Refund notices. Returns the hex offer ids that were swept.
+    pub fn enforce_deadlines(&self) -> Vec<String> {
+        self.node.enforce_deadlines()
+    }
+
     /// Snapshot of one tracked session (None = unknown offer id).
     pub fn session(&self, offer_id: &str) -> Option<TrackedSession> {
         self.node.net().lock().unwrap().session(offer_id).cloned()
@@ -173,10 +180,15 @@ pub fn global() -> Option<Arc<SwapService>> {
 }
 
 /// Feed the live chain tip to the process-wide node (no-op if it was
-/// never started - e.g. GHOST_SWAP=0).
+/// never started - e.g. GHOST_SWAP=0). Every feed also runs the WG-18
+/// deadline sweep, so an accepted block that closes a swap's fund or
+/// claim window auto-refunds the session and notifies the peers.
 pub fn feed_height(h: u64) {
     if let Some(svc) = global() {
         svc.set_height(h);
+        for id in svc.enforce_deadlines() {
+            println!("[opacusd-swap] auto-refunded expired swap {id}");
+        }
     }
 }
 
@@ -244,6 +256,26 @@ mod tests {
     use std::time::{Duration, Instant};
 
     const PREIMAGE: [u8; 32] = [9u8; 32];
+
+    /// WG-18: the service-level sweep refunds an expired taker session at
+    /// the live height and stays idempotent afterwards.
+    #[test]
+    fn service_deadline_sweep_refunds_expired_session() {
+        let svc = SwapService::spawn(&net_cfg()).unwrap();
+        svc.set_height(1000);
+        let (id, wire) = external_offer_wire();
+        svc.node().process_wire(&wire).unwrap(); // taker Accepted @ 1000
+
+        // Inside the fund window (1000 + 100): nothing to sweep.
+        assert!(svc.enforce_deadlines().is_empty());
+
+        // Past the fund window: swept exactly once.
+        svc.set_height(1101);
+        assert_eq!(svc.enforce_deadlines(), vec![id.clone()]);
+        let t = svc.session(&id).unwrap();
+        assert_eq!(t.session.phase, Phase::Refunded);
+        assert!(svc.enforce_deadlines().is_empty());
+    }
 
     fn net_cfg() -> NetworkConfig {
         NetworkConfig {
@@ -389,15 +421,36 @@ mod tests {
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Process-wide registry: idempotent init + the feed_height one-liner.
+    /// (WG-18 note: the sweep test below may have started the global node
+    /// first - the registry has no teardown - so this test pins only what
+    /// it owns: init is idempotent and feed_height flows through.)
     #[test]
     fn global_registry_feed_height_and_idempotent_init() {
         let _g = TEST_LOCK.lock().unwrap();
-        assert!(global().is_none());
         let first = init_global(&net_cfg()).unwrap();
         assert!(global().is_some());
         let second = init_global(&net_cfg()).unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         feed_height(777);
         assert_eq!(global().unwrap().height(), 777);
+    }
+
+    /// WG-18: feeding a height that closes the fund window auto-refunds
+    /// the expired session (the opacusd block loop enforces deadlines).
+    #[test]
+    fn feed_height_runs_deadline_sweep() {
+        let _g = TEST_LOCK.lock().unwrap();
+        if global().is_none() {
+            init_global(&net_cfg()).unwrap();
+        }
+        let svc = global().unwrap();
+        svc.set_height(2000);
+        let (id, wire) = external_offer_wire();
+        svc.node().process_wire(&wire).unwrap(); // taker Accepted @ 2000
+        assert!(svc.session(&id).is_some());
+
+        // 2000 + 100 = 2100 fund window; feeding 2101 sweeps it inline.
+        feed_height(2101);
+        assert_eq!(svc.session(&id).unwrap().session.phase, Phase::Refunded);
     }
 }

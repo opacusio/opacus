@@ -36,7 +36,8 @@
 //! v0.1 limitations: direct 1:1 dials only (no gossip/discovery - the full
 //! libp2p stack lands in v0.3); a protocol violation closes the connection
 //! silently (the wire protocol has no Error frame yet); Refund frames are
-//! notices, deadline enforcement stays local via the session state machine.
+//! notices, and the WG-18 deadline sweep ([`SwapNode::enforce_deadlines`])
+//! auto-refunds expired sessions on every height feed.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -410,6 +411,46 @@ impl SwapNode {
             .receive_frame(wire, self.height.load(Ordering::Relaxed))?)
     }
 
+    /// WG-18 deadline sweep: refund every tracked session whose protocol
+    /// deadline passed at the current node height and broadcast the Refund
+    /// notice to all dialed peers. Returns the hex offer ids that were
+    /// swept (each is also logged as a Rejected event with the reason).
+    ///
+    /// Sweeping is idempotent: a refunded session leaves the eligible
+    /// phase, so later sweeps never re-report it. opacusd calls this on
+    /// every accepted block through `feed_height`; it is also safe to
+    /// call directly at any cadence. Deadline arithmetic saturates, so a
+    /// hostile offer timeout can never panic the node here.
+    pub fn enforce_deadlines(&self) -> Vec<String> {
+        let now = self.height.load(Ordering::Relaxed);
+        let expired = self.net.lock().unwrap().expired_sessions(now);
+        let mut swept = Vec::new();
+        for e in expired {
+            let id_hex = hex::encode(e.offer_id);
+            match self
+                .net
+                .lock()
+                .unwrap()
+                .publish_refund(&id_hex, e.reason, now)
+            {
+                Ok(wire) => {
+                    let _ = self.send_wire(&wire);
+                    self.log(NodeEvent::Rejected(format!(
+                        "auto-refund {id_hex} ({})",
+                        e.reason
+                    )));
+                    swept.push(id_hex);
+                }
+                Err(_) => {
+                    // The state machine refused (a racing sweep or an
+                    // inbound frame moved the session first); the next
+                    // sweep re-evaluates from the fresh phase.
+                }
+            }
+        }
+        swept
+    }
+
     /// Per-connection read loop: read -> apply -> reply on the same socket.
     /// Any protocol violation closes the connection (no Error frame in
     /// v0.1); an idle peer is disconnected after the read timeout.
@@ -481,6 +522,77 @@ mod tests {
     use std::time::Instant;
 
     const PREIMAGE: [u8; 32] = [7u8; 32];
+
+    /// WG-18: the node deadline sweep refunds an expired taker session,
+    /// logs the auto-refund and stays idempotent afterwards.
+    #[test]
+    fn deadline_sweep_refunds_expired_taker_session() {
+        let node = SwapNode::start(test_cfg()).unwrap();
+        let (id, wire) = external_offer_wire();
+        node.process_wire(&wire).unwrap(); // taker Accepted @ cfg height 1000
+
+        // Inside the fund window (1000 + 100): nothing to sweep.
+        assert!(node.enforce_deadlines().is_empty());
+        assert_eq!(node.net().lock().unwrap().session_count(), 1);
+
+        // Past the fund window: sweep refunds + broadcasts the notice.
+        node.set_height(1101);
+        let swept = node.enforce_deadlines();
+        assert_eq!(swept, vec![id.clone()]);
+        let net = node.net();
+        let t = net.lock().unwrap().session(&id).cloned().unwrap();
+        assert_eq!(t.session.phase, Phase::Refunded);
+        assert!(!t.peer_refunded); // local auto-refund, not a peer frame
+        assert!(node
+            .events()
+            .iter()
+            .any(|e| matches!(e, NodeEvent::Rejected(m) if m.contains("auto-refund"))));
+
+        // Idempotent: the refunded session is never re-reported.
+        assert!(node.enforce_deadlines().is_empty());
+    }
+
+    /// WG-18: a maker session left in GhostLocked past the claim window is
+    /// swept exactly once the deadline passes.
+    #[test]
+    fn deadline_sweep_refunds_maker_after_claim_window() {
+        let node = SwapNode::start(test_cfg()).unwrap();
+        // The node is the MAKER here (locally registered offer).
+        let id = node.broadcast_offer(&offer(), &PREIMAGE).unwrap();
+
+        // The taker announces his XMR lock (implicit accept @ 1050), then
+        // the maker locks GHOST locally and reveals the preimage.
+        let xmr_frame = Frame::new(SwapNetMessage::XmrLocked {
+            offer_id: id.clone(),
+            xmr_tx_hash: "xmr-tx-sweep".to_string(),
+            height: 1050,
+        });
+        node.process_wire(&encode_frame(&xmr_frame).unwrap())
+            .unwrap();
+        node.net()
+            .lock()
+            .unwrap()
+            .publish_ghost_lock(&id, "ghost-burn-sweep", 1060)
+            .unwrap();
+
+        // claim window: both_locked 1060 + 200 -> deadline 1260
+        node.set_height(1260);
+        assert!(node.enforce_deadlines().is_empty());
+        node.set_height(1261);
+        let swept = node.enforce_deadlines();
+        assert_eq!(swept, vec![id.clone()]);
+        let net = node.net();
+        assert_eq!(
+            net.lock()
+                .unwrap()
+                .session(&id)
+                .cloned()
+                .unwrap()
+                .session
+                .phase,
+            Phase::Refunded
+        );
+    }
 
     fn offer() -> Offer {
         Offer::new(

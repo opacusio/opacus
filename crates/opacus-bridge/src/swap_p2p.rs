@@ -22,8 +22,10 @@
 //!  -> claim XMR with revealed P
 //! ```
 //!
-//! v0.1 limitations: Refund frames are notices (deadline enforcement stays
-//! local via [`SwapSession::refund`]); offer ids bind the exact payload
+//! v0.1 limitations: Refund frames are notices; deadline enforcement is a
+//! node-level sweep ([`SwapNet::expired_sessions`] feeding
+//! [`SwapNode::enforce_deadlines`], WG-18) that auto-refunds expired
+//! sessions on every height feed; offer ids bind the exact payload
 //! bytes (blake3 over canonical JSON) so tampering is rejected.
 
 use std::collections::HashMap;
@@ -299,6 +301,14 @@ pub struct TrackedSession {
     pub ghost_tx_ref: Option<String>,
 }
 
+/// One deadline-expired swap reported by [`SwapNet::expired_sessions`]
+/// (WG-18). The reason is forwarded verbatim into the Refund notice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpiredSwap {
+    pub offer_id: [u8; 32],
+    pub reason: &'static str,
+}
+
 /// All swap sessions of this node, keyed by offer id.
 #[derive(Default)]
 pub struct SwapNet {
@@ -319,6 +329,55 @@ impl SwapNet {
 
     pub fn session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    // -- WG-18: deadline enforcement ----------------------------------------
+
+    /// Sessions whose protocol deadline has passed at chain height `now`
+    /// (WG-18). Exactly the two refund-eligible states of
+    /// [`SwapSession::refund`]:
+    ///
+    /// * taker, still `Accepted` past the fund window;
+    /// * maker, still `GhostLocked` past the claim window.
+    ///
+    /// Each reported session refunds successfully through
+    /// [`SwapSession::refund`], so a sweep that calls `publish_refund`
+    /// per entry cannot double-report: a refunded session leaves the
+    /// eligible phase and later sweeps skip it. Timeouts arrive from
+    /// peer payloads, so the deadlines are computed with saturating
+    /// arithmetic (a malicious `u64` timeout must not panic the node).
+    pub fn expired_sessions(&self, now: u64) -> Vec<ExpiredSwap> {
+        let mut out = Vec::new();
+        for (id, t) in self.sessions.iter() {
+            let s = &t.session;
+            match (s.phase, s.role) {
+                (Phase::Accepted, Role::Taker) => {
+                    let deadline = s
+                        .accepted_height
+                        .saturating_add(s.offer.fund_timeout_blocks);
+                    if now > deadline {
+                        out.push(ExpiredSwap {
+                            offer_id: *id,
+                            reason: "fund window expired",
+                        });
+                    }
+                }
+                (Phase::GhostLocked, Role::Maker) => {
+                    let deadline = s
+                        .both_locked_height
+                        .unwrap_or(0)
+                        .saturating_add(s.offer.claim_timeout_blocks);
+                    if now > deadline {
+                        out.push(ExpiredSwap {
+                            offer_id: *id,
+                            reason: "claim window expired",
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     fn tracked_mut(&mut self, offer_id_hex: &str) -> Result<&mut TrackedSession, SwapNetError> {
@@ -565,6 +624,78 @@ mod tests {
     use super::*;
 
     const PREIMAGE: [u8; 32] = [42u8; 32];
+
+    /// WG-18: the deadline sweep reports exactly the refund-eligible
+    /// sessions and stops reporting them once refunded.
+    #[test]
+    fn expired_sessions_reports_refund_eligible_only() {
+        // Maker registers the offer; a taker takes it via the wire frame.
+        let mut maker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+
+        let mut taker = SwapNet::new();
+        taker.receive_frame(&offer_wire, 100).unwrap(); // taker Accepted @ 100
+        assert_eq!(taker.session_count(), 1);
+
+        // Maker still Offered, taker inside the fund window: nothing expired.
+        assert!(maker.expired_sessions(1_000).is_empty());
+        assert!(taker.expired_sessions(100).is_empty());
+        assert!(taker.expired_sessions(200).is_empty()); // 100 + 100 fund timeout
+
+        // Past the fund window the taker session expires.
+        let expired = taker.expired_sessions(201);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(hex32(&expired[0].offer_id), id_hex);
+        assert_eq!(expired[0].reason, "fund window expired");
+
+        // Refunding removes it from every later sweep.
+        taker.publish_refund(&id_hex, "sweep test", 201).unwrap();
+        assert!(taker.expired_sessions(9_999).is_empty());
+
+        // Maker side: XmrLocked (implicit accept), GHOST lock, then the
+        // claim window (both_locked 120 + 200) passes.
+        let xmr_frame = Frame::new(SwapNetMessage::XmrLocked {
+            offer_id: id_hex.clone(),
+            xmr_tx_hash: "xmr-tx-sweep".to_string(),
+            height: 110,
+        });
+        maker
+            .receive_frame(&encode_frame(&xmr_frame).unwrap(), 110)
+            .unwrap();
+        let _lock_wire = maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-sweep", 120)
+            .unwrap();
+        assert!(maker.expired_sessions(320).is_empty());
+        let expired = maker.expired_sessions(321);
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].reason, "claim window expired");
+        maker.publish_refund(&id_hex, "sweep test", 321).unwrap();
+        assert!(maker.expired_sessions(9_999).is_empty());
+    }
+
+    /// WG-18: adversarial u64 timeouts saturate instead of panicking the
+    /// sweep (timeouts arrive from peer-owned offer payloads).
+    #[test]
+    fn expired_sessions_saturates_hostile_timeouts() {
+        let mut maker = SwapNet::new();
+        let hostile = Offer::new(
+            1_000_000_000_000,
+            500_000_000,
+            u64::MAX,
+            u64::MAX,
+            "ghost-maker",
+            "xmr-taker",
+            &PREIMAGE,
+        )
+        .unwrap();
+        let (_id_hex, offer_wire) = maker.publish_offer(hostile, PREIMAGE).unwrap();
+
+        let mut taker = SwapNet::new();
+        taker.receive_frame(&offer_wire, 100).unwrap(); // Accepted @ 100
+                                                        // accepted 100 + u64::MAX saturates; no height can exceed it and
+                                                        // the sweep must neither panic nor report.
+        assert!(taker.expired_sessions(u64::MAX).is_empty());
+    }
 
     fn offer() -> Offer {
         Offer::new(
