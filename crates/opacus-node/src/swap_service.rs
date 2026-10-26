@@ -252,8 +252,8 @@ pub fn autostart_from_env() -> bool {
 mod tests {
     use super::*;
     use opacus_network::swap_node::{
-        encode_frame, hashlock_of, offer_id_of, Frame, Phase, SwapNetError, SwapNetMessage,
-        SwapOfferPayload,
+        encode_frame, hashlock_of, offer_id_of, one_time_keys, Frame, OfferAdaptor, Phase,
+        SwapNetError, SwapNetMessage, SwapOfferPayload,
     };
     use std::time::{Duration, Instant};
 
@@ -307,6 +307,50 @@ mod tests {
         );
     }
 
+    /// WG-22: an Offer with a valid-but-mismatched one-time sidecar is
+    /// tracked, but the taker refuses the GhostLocked announcement (the
+    /// revealed preimage does not re-derive the announced keys) - the
+    /// rejection surfaces as a protocol error at the node boundary.
+    #[test]
+    fn sidecar_mismatch_blocks_ghost_lock_at_service() {
+        let taker = SwapService::spawn(&net_cfg()).unwrap();
+        taker.set_height(1000);
+        let payload = SwapOfferPayload {
+            xmr_piconero: 1_000_000_000_000,
+            ghost_atoms: 500_000_000,
+            hashlock: hex_str(&hashlock_of(&PREIMAGE)),
+            fund_timeout_blocks: 100,
+            claim_timeout_blocks: 200,
+            maker_ghost_address: "ghost-maker-svc".to_string(),
+            taker_xmr_address: "xmr-taker-svc".to_string(),
+        };
+        let id = offer_id_of(&payload);
+        let mut frame = Frame::new(SwapNetMessage::Offer {
+            offer_id: hex_str(&id),
+            payload,
+        });
+        frame.adaptor = Some(OfferAdaptor::from_keys(&one_time_keys(&[0x5Au8; 32])));
+        let wire = encode_frame(&frame).unwrap();
+        taker.node().process_wire(&wire).unwrap(); // Accepted, sidecar stored
+
+        taker.xmr_lock(&hex_str(&id), "xmr-tx-wg22s", 1050).unwrap();
+        let ghost = Frame::new(SwapNetMessage::GhostLocked {
+            offer_id: hex_str(&id),
+            ghost_tx_ref: "ghost-burn-wg22s".to_string(),
+            height: 1060,
+            preimage: hex_str(&PREIMAGE),
+        });
+        let err = taker
+            .node()
+            .process_wire(&encode_frame(&ghost).unwrap())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            NetError::Protocol(SwapNetError::OneTimeKeyMismatch)
+        ));
+        let t = taker.session(&hex_str(&id)).unwrap();
+        assert_eq!(t.session.phase, Phase::XmrLocked);
+    }
     fn offer() -> Offer {
         Offer::new(
             1_000_000_000_000, // 1 XMR

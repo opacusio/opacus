@@ -27,6 +27,11 @@
 //! [`SwapNode::enforce_deadlines`], WG-18) that auto-refunds expired
 //! sessions on every height feed; offer ids bind the exact payload
 //! bytes (blake3 over canonical JSON) so tampering is rejected.
+//!
+//! WG-22: the taker consumes the offer sidecar end-to-end - the
+//! GhostLocked preimage must re-derive the announced one-time keys
+//! (fail-closed in [`SwapNet::handle_message_with_otk`]) or the lock is
+//! rejected before the session state moves.
 
 use std::collections::HashMap;
 
@@ -198,6 +203,11 @@ pub enum SwapNetError {
     MalformedOffer(&'static str),
     /// Maker tried to publish the ghost lock without a stored preimage.
     MissingPreimage,
+
+    /// WG-22: the taker's re-derivation of the offer-side one-time keys
+    /// from the revealed preimage does not match the sidecar announced at
+    /// offer time (fail-closed GhostLocked rejection).
+    OneTimeKeyMismatch,
     Frame(String),
 }
 
@@ -212,6 +222,10 @@ impl std::fmt::Display for SwapNetError {
             SwapNetError::BadHex(m) => write!(f, "bad hex: {m}"),
             SwapNetError::MalformedOffer(m) => write!(f, "malformed offer: {m}"),
             SwapNetError::MissingPreimage => write!(f, "no preimage stored for this session"),
+
+            SwapNetError::OneTimeKeyMismatch => {
+                write!(f, "offer one-time key does not match the revealed preimage")
+            }
             SwapNetError::Frame(m) => write!(f, "frame: {m}"),
         }
     }
@@ -246,7 +260,8 @@ fn parse_hex32(s: &str) -> Result<[u8; 32], SwapNetError> {
 /// WG-21: deterministic one-time spend key for the maker's GHOST lock,
 /// derived from the swap preimage (domain-separated from the hashlock):
 /// the taker re-derives the same key from the revealed preimage at
-/// claim time, so the offer sidecar (P, I) is verifiable end-to-end.
+/// claim time; WG-22 enforces that re-derivation fail-closed at the
+/// taker's GhostLocked step (see [`SwapNet::handle_message_with_otk`]).
 fn otk_seed(preimage: &[u8; 32]) -> [u8; 32] {
     let mut h = Hasher::new();
     h.update(b"ghost-bridge/offer-otk-v1");
@@ -688,6 +703,18 @@ impl SwapNet {
                 if hashlock_of(&pre) != t.session.offer.hashlock {
                     return Err(SwapNetError::State(SwapError::BadPreimage));
                 }
+                // WG-22: the taker closes the WG-21 loop - the revealed
+                // preimage must re-derive the one-time keys announced in
+                // the offer sidecar. A maker whose announcement is not his
+                // own deterministic derivation is rejected fail-closed
+                // BEFORE any state transition, so no Claim auto-reply is
+                // produced for a mismatched lock.
+                if let Some(otk) = t.offer_otk.as_ref() {
+                    let expected = one_time_keys(&otk_seed(&pre));
+                    if *otk != expected {
+                        return Err(SwapNetError::OneTimeKeyMismatch);
+                    }
+                }
                 t.session.mark_ghost_locked(height)?;
                 t.ghost_tx_ref = Some(ghost_tx_ref);
                 Ok(vec![SwapNetMessage::Claim { offer_id, preimage }])
@@ -781,6 +808,90 @@ mod tests {
         let t = taker.session(&hex32(&offer_id_of(&payload()))).unwrap();
         let otk = t.offer_otk.as_ref().expect("sidecar stored");
         assert_eq!(otk.p, one_time_keys(&otk_seed(&PREIMAGE)).p);
+    }
+
+    // -- WG-22: taker-side sidecar consumption -------------------------------
+
+    /// WG-22: the honest path still closes - the taker re-derives the
+    /// sidecar one-time keys from the revealed preimage and auto-claims.
+    #[test]
+    fn ghost_lock_sidecar_binding_holds_on_honest_path() {
+        let mut maker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let mut taker = SwapNet::new();
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        let lock_wire = taker.publish_xmr_lock(&id_hex, "xmr-tx-wg22", 110).unwrap();
+        // the maker must observe the taker's lock first: mark_ghost_locked
+        // requires Phase::XmrLocked on the maker's side as well
+        maker.receive_frame(&lock_wire, 0).unwrap();
+        let ghost_wire = maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-wg22", 120)
+            .unwrap();
+        let replies = taker.receive_frame(&ghost_wire, 0).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(
+            decode_frame(&replies[0]).unwrap().msg,
+            SwapNetMessage::Claim { .. }
+        ));
+    }
+
+    /// WG-22: a valid-but-mismatched sidecar (a maker announcing one-time
+    /// keys his own preimage derivation does not produce) is rejected
+    /// fail-closed at the taker's GhostLocked step - no state transition,
+    /// no Claim reply, the session stays XmrLocked.
+    #[test]
+    fn ghost_lock_sidecar_mismatch_rejected() {
+        let mut maker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        // forge the sidecar: structurally valid, wrong derivation
+        let mut frame = decode_frame(&offer_wire).unwrap();
+        let mut forged = frame.adaptor.clone().unwrap();
+        let impostor = one_time_keys(&[43u8; 32]);
+        forged.p = hex32(&impostor.p);
+        forged.image = hex32(&impostor.image);
+        frame.adaptor = Some(forged);
+        let offer_wire = encode_frame(&frame).unwrap();
+
+        let mut taker = SwapNet::new();
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        let lock_wire = taker.publish_xmr_lock(&id_hex, "xmr-tx-wg22", 110).unwrap();
+        maker.receive_frame(&lock_wire, 0).unwrap();
+        let ghost_wire = maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-wg22", 120)
+            .unwrap();
+        assert_eq!(
+            taker.receive_frame(&ghost_wire, 0).unwrap_err(),
+            SwapNetError::OneTimeKeyMismatch
+        );
+        let t = taker.session(&id_hex).unwrap();
+        assert_eq!(t.session.phase, Phase::XmrLocked);
+        assert!(t.offer_otk.is_some());
+    }
+
+    /// WG-22: pre-WG-21 offers carry no sidecar - the v1 wire shape keeps
+    /// claiming exactly as before (no derivation to compare against).
+    #[test]
+    fn ghost_lock_without_sidecar_still_claims() {
+        let mut maker = SwapNet::new();
+        let (_, wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let mut frame = decode_frame(&wire).unwrap();
+        frame.adaptor = None;
+        let offer_wire = encode_frame(&frame).unwrap();
+        let id_hex = hex32(&offer_id_of(&payload()));
+
+        let mut taker = SwapNet::new();
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        let lock_wire = taker.publish_xmr_lock(&id_hex, "xmr-tx-v1", 110).unwrap();
+        maker.receive_frame(&lock_wire, 0).unwrap();
+        let ghost_wire = maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-v1", 120)
+            .unwrap();
+        let replies = taker.receive_frame(&ghost_wire, 0).unwrap();
+        assert_eq!(replies.len(), 1);
+        assert!(matches!(
+            decode_frame(&replies[0]).unwrap().msg,
+            SwapNetMessage::Claim { .. }
+        ));
     }
 
     const PREIMAGE: [u8; 32] = [42u8; 32];

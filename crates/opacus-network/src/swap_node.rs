@@ -56,6 +56,9 @@ pub use opacus_bridge::swap_p2p::{
 };
 pub use opacus_bridge::xmr_swap::{hashlock_of, Offer, Phase, Role, SwapError, SwapSession};
 
+pub use opacus_bridge::clsag::one_time_keys;
+pub use opacus_bridge::swap_p2p::OfferAdaptor;
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -1072,5 +1075,39 @@ mod tests {
             matches!(err, NetError::Protocol(_) | NetError::Frame(_)),
             "tampered frame must be rejected, got {err:?}"
         );
+    }
+
+    /// WG-22: an Offer with a VALID but wrong one-time sidecar is tracked
+    /// (fail-closed structural validation passes), but the later
+    /// GhostLocked preimage fails the taker's re-derivation and the node
+    /// rejects the frame (a protocol violation closes the connection).
+    #[test]
+    fn sidecar_mismatch_rejected_in_process() {
+        let node = SwapNode::start(test_cfg()).unwrap();
+        let (id, wire) = external_offer_wire();
+        let mut frame = decode_frame(&wire).unwrap();
+        let impostor = one_time_keys(&[0xAAu8; 32]);
+        frame.adaptor = Some(OfferAdaptor::from_keys(&impostor));
+        let wire = encode_frame(&frame).unwrap();
+        node.process_wire(&wire).unwrap(); // taker Accepted (sidecar stored)
+
+        node.net()
+            .lock()
+            .unwrap()
+            .publish_xmr_lock(&id, "xmr-tx-wg22n", 1050)
+            .unwrap();
+        let ghost = Frame::new(SwapNetMessage::GhostLocked {
+            offer_id: id,
+            ghost_tx_ref: "ghost-burn-wg22n".to_string(),
+            height: 1060,
+            preimage: hex_str(&PREIMAGE),
+        });
+        let err = node
+            .process_wire(&encode_frame(&ghost).unwrap())
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            NetError::Protocol(SwapNetError::OneTimeKeyMismatch)
+        ));
     }
 }
