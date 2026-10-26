@@ -26,6 +26,11 @@
 //! Replaces the v0.2 `verify_placeholder` stub (a non-zero-byte check)
 //! flagged by the security audit: verification is now the real group
 //! equation over curve25519.
+//!
+//! WG-19 hardening: verification rejects degenerate adaptor points
+//! `T` (identity / small order - a consistent zero-secret adaptor
+//! used to pass) and enforces canonical `s` encodings (BIP-340
+//! style), closing the `+(l)` malleability of completed signatures.
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as B;
 use curve25519_dalek::edwards::{CompressedEdwardsY, EdwardsPoint};
@@ -102,6 +107,19 @@ fn decompress(bytes: &[u8; 32]) -> Result<EdwardsPoint, AdaptorError> {
         .ok_or(AdaptorError::InvalidPoint)
 }
 
+/// Parse a scalar from its canonical (reduced) little-endian encoding.
+/// Non-canonical encodings `n >= l` are rejected instead of being
+/// silently reduced (BIP-340-style canonical-s policy, WG-19): the
+/// difference is invisible to the group equation but yields two
+/// distinct byte encodings of one signature (malleability).
+fn canonical_scalar(bytes: &[u8; 32]) -> Option<Scalar> {
+    let s = Scalar::from_bytes_mod_order(*bytes);
+    if s.to_bytes() != *bytes {
+        return None;
+    }
+    Some(s)
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdaptorSignature {
     /// Nonce commitment `R = [r] * B` (compressed).
@@ -143,6 +161,9 @@ impl AdaptorSignature {
     /// `msg`: `s' * B + T == R + e * A`. Completing with the true secret
     /// turns this equation into the full Schnorr verification
     /// `s * B == R + e * A`.
+    ///
+    /// WG-19: degenerate adaptor points (identity / small order `T`) and
+    /// non-canonical `s'` encodings are rejected (BIP-340-style).
     pub fn verify(&self, msg: &[u8], a_pub: &[u8; 32]) -> bool {
         let (Ok(r_point), Ok(a)) = (decompress(&self.r_point), decompress(a_pub)) else {
             return false;
@@ -150,8 +171,19 @@ impl AdaptorSignature {
         let Ok(t_point) = decompress(&self.t_point) else {
             return false;
         };
+        // WG-19: reject degenerate adaptor points. T = identity is the
+        // consistent zero-secret adaptor (s' = r + e * a used to verify
+        // while carrying no secret), and small-order T leaves the hidden
+        // scalar under-determined. Honest sign() can never emit one:
+        // [t] * B with t in F_l always lands in the prime-order subgroup.
+        if t_point.is_small_order() {
+            return false;
+        }
+        let Some(s_adaptor) = canonical_scalar(&self.s_adaptor) else {
+            return false;
+        };
         let e = challenge(&self.r_point, a_pub, msg);
-        let lhs = Scalar::from_bytes_mod_order(self.s_adaptor) * B + t_point;
+        let lhs = s_adaptor * B + t_point;
         lhs == r_point + e * a
     }
 
@@ -186,6 +218,10 @@ impl AdaptorSignature {
 /// Verify a completed (full) Schnorr signature `(R, s)` over `msg` under
 /// `a_pub`: `s * B == R + e * A`. This is the check the counterparty runs
 /// on the completed signature that revealed the swap secret.
+///
+/// WG-19: `s` must be canonically encoded (`s < l`, BIP-340-style): a
+/// `+(l)`-shifted re-encoding of a valid signature is rejected instead
+/// of silently reducing to the same scalar (malleability fix).
 pub fn verify_full(full_sig: &[u8; 64], msg: &[u8], a_pub: &[u8; 32]) -> bool {
     let mut r_bytes = [0u8; 32];
     r_bytes.copy_from_slice(&full_sig[..32]);
@@ -197,8 +233,11 @@ pub fn verify_full(full_sig: &[u8; 64], msg: &[u8], a_pub: &[u8; 32]) -> bool {
     let Ok(a) = decompress(a_pub) else {
         return false;
     };
+    let Some(s) = canonical_scalar(&s_bytes) else {
+        return false;
+    };
     let e = challenge(&r_bytes, a_pub, msg);
-    Scalar::from_bytes_mod_order(s_bytes) * B == r_point + e * a
+    s * B == r_point + e * a
 }
 
 // ---------------------------------------------------------------------------
@@ -320,8 +359,9 @@ mod tests {
         let t2 = [2u8; 32];
         assert_eq!(derive_point(&t1), derive_point(&t1));
         assert_ne!(derive_point(&t1), derive_point(&t2));
-        // Zero secret maps to the identity point encoding, still a valid
-        // (degenerate) adaptor point.
+        // Zero secret maps to the identity point encoding; derive_point
+        // stays pure math, while verify() rejects the degenerate adaptor
+        // (see verify_rejects_zero_secret_adaptor).
         let zero = derive_point(&[0u8; 32]);
         assert!(decompress(&zero).is_ok());
     }
@@ -345,5 +385,89 @@ mod tests {
         assert_eq!(s1.s_adaptor, s2.s_adaptor);
         let s3 = AdaptorSignature::sign(&sk, &t, b"another msg");
         assert_ne!(s1.r_point, s3.r_point);
+    }
+
+    // -- WG-19 hardening tests ----------------------------------------------
+
+    /// Little-endian encoding of the ed25519 group order
+    /// l = 2^252 + 27742317777372353535851937790883648493.
+    fn order_le() -> [u8; 32] {
+        const ORDER_HEX: &str = "edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010";
+        let mut b = [0u8; 32];
+        for i in 0..32 {
+            b[i] = u8::from_str_radix(&ORDER_HEX[2 * i..2 * i + 2], 16).expect("valid hex");
+        }
+        b
+    }
+
+    /// Little-endian 32-byte addition (no modular reduction): n = s + l
+    /// fits in 32 bytes whenever s < l, and n mod l == s.
+    fn le_add(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        let mut carry = 0u16;
+        for i in 0..32 {
+            let sum = a[i] as u16 + b[i] as u16 + carry;
+            out[i] = (sum & 0xff) as u8;
+            carry = sum >> 8;
+        }
+        assert_eq!(carry, 0, "le_add overflow");
+        out
+    }
+
+    #[test]
+    fn verify_rejects_zero_secret_adaptor() {
+        let (sk, a_pub) = keypair();
+        // A consistent zero-secret adaptor: t = 0 -> T = identity and
+        // s' = r + e * a closes the group equation while carrying no
+        // secret. Pre-WG-19 this PASSED verification.
+        let zero = SwapSecret { t: [0u8; 32] };
+        let sig = AdaptorSignature::sign(&sk, &zero, MSG);
+        assert_eq!(sig.t_point, derive_point(&zero.t));
+        assert!(!sig.verify(MSG, &a_pub));
+    }
+
+    #[test]
+    fn verify_rejects_small_order_t_point() {
+        use curve25519_dalek::constants::EIGHT_TORSION;
+        let (sk, a_pub) = keypair();
+        let t = SwapSecret::generate(&mut OsRng);
+        let mut sig = AdaptorSignature::sign(&sk, &t, MSG);
+        // Order-8 torsion point: decompresses fine, not the identity,
+        // but outside the prime-order subgroup - rejected as policy
+        // (the group equation alone would reject it too).
+        sig.t_point = EIGHT_TORSION[1].compress().to_bytes();
+        assert!(!sig.verify(MSG, &a_pub));
+    }
+
+    #[test]
+    fn verify_rejects_non_canonical_s_adaptor() {
+        let (sk, a_pub) = keypair();
+        let t = SwapSecret::generate(&mut OsRng);
+        let mut sig = AdaptorSignature::sign(&sk, &t, MSG);
+        // s' + l encodes the same scalar non-canonically: the pre-WG-19
+        // verifier reduced it silently and the equation closed.
+        let shifted = le_add(&sig.s_adaptor, &order_le());
+        assert_ne!(shifted, sig.s_adaptor);
+        sig.s_adaptor = shifted;
+        assert!(!sig.verify(MSG, &a_pub));
+    }
+
+    #[test]
+    fn verify_full_rejects_non_canonical_s() {
+        let (sk, a_pub) = keypair();
+        let t = SwapSecret::generate(&mut OsRng);
+        let sig = AdaptorSignature::sign(&sk, &t, MSG);
+        let full = sig.complete(&t);
+        assert!(verify_full(&full, MSG, &a_pub));
+        // Malleated re-encoding s + l of the same scalar: pre-WG-19 the
+        // verifier accepted it (from_bytes_mod_order silently reduced);
+        // now rejected, killing the +(l) malleability.
+        let mut malleated = [0u8; 64];
+        malleated[..32].copy_from_slice(&full[..32]);
+        let mut s_bytes = [0u8; 32];
+        s_bytes.copy_from_slice(&full[32..]);
+        let shifted = le_add(&s_bytes, &order_le());
+        malleated[32..].copy_from_slice(&shifted);
+        assert!(!verify_full(&malleated, MSG, &a_pub));
     }
 }
