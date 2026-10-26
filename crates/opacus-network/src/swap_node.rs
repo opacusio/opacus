@@ -364,7 +364,9 @@ impl SwapNode {
 
     /// Register a local offer (preimage kept for the later XMR claim) and
     /// broadcast the Offer frame to all dialed peers. Returns the hex offer
-    /// id. The offer is tracked even with zero peers connected.
+    /// id. The offer is tracked even with zero peers connected. WG-21:
+    /// the broadcast frame embeds the one-time key sidecar derived from
+    /// the preimage (see `SwapNet::publish_offer`).
     pub fn broadcast_offer(&self, offer: &Offer, preimage: &[u8; 32]) -> Result<String, NetError> {
         let (id, wire) = self
             .net
@@ -377,7 +379,8 @@ impl SwapNode {
 
     /// Process one inbound wire frame without any socket: the pure protocol
     /// step of conn_loop (handy for tests and embedded hosts). Returns the
-    /// encoded auto-reply frames.
+    /// encoded auto-reply frames. WG-21: Offer sidecars are validated
+    /// fail-closed inside `SwapNet::receive_frame` before this returns.
     ///
     /// Net-2 admission cap: a NEW Offer arriving while the session
     /// registry is at `max_sessions` is dropped before it reaches the
@@ -632,7 +635,8 @@ mod tests {
     }
 
     /// An Offer frame built the way an EXTERNAL peer would build it
-    /// (nothing registered locally).
+    /// (nothing registered locally). WG-21: published without a one-time
+    /// key sidecar - the v1 wire shape that WG-21 receivers still accept.
     fn external_offer_wire() -> (String, Vec<u8>) {
         external_offer_wire_with(PREIMAGE)
     }

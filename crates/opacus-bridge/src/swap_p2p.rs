@@ -33,6 +33,7 @@ use std::collections::HashMap;
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 
+use crate::clsag::{one_time_keys, OneTimeKeys};
 use crate::xmr_swap::{hashlock_of, Offer, Phase, Role, SwapError, SwapSession};
 
 /// Wire protocol identifier; frames with a different tag are rejected.
@@ -45,6 +46,10 @@ const OFFER_ID_TAG: &[u8] = b"ghost-swap-offer-id-v1";
 
 /// The offer fields exactly as hashed into the offer id.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// WG-21: the payload fields are unchanged from v1 and still hash into
+/// the offer id exactly as before; the one-time key binding travels as
+/// an OPTIONAL Frame-level sidecar ([`OfferAdaptor`]) and is never
+/// hashed into the id.
 pub struct SwapOfferPayload {
     /// XMR amount in piconero (1e12).
     pub xmr_piconero: u64,
@@ -92,6 +97,12 @@ pub enum SwapNetMessage {
 /// Envelope with a protocol tag; the unit that travels over the wire.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frame {
+    /// WG-21: optional offer-side one-time key binding. Present only on
+    /// Offer frames from WG-21 makers; `serde(default)` keeps v1 frames
+    /// decodable and `skip_serializing_if` keeps v1 bytes stable. NOT
+    /// hashed into the offer id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adaptor: Option<OfferAdaptor>,
     pub protocol: String,
     #[serde(flatten)]
     pub msg: SwapNetMessage,
@@ -100,6 +111,7 @@ pub struct Frame {
 impl Frame {
     pub fn new(msg: SwapNetMessage) -> Self {
         Frame {
+            adaptor: None,
             protocol: PROTOCOL.to_string(),
             msg,
         }
@@ -231,6 +243,17 @@ fn parse_hex32(s: &str) -> Result<[u8; 32], SwapNetError> {
     Ok(out)
 }
 
+/// WG-21: deterministic one-time spend key for the maker's GHOST lock,
+/// derived from the swap preimage (domain-separated from the hashlock):
+/// the taker re-derives the same key from the revealed preimage at
+/// claim time, so the offer sidecar (P, I) is verifiable end-to-end.
+fn otk_seed(preimage: &[u8; 32]) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(b"ghost-bridge/offer-otk-v1");
+    h.update(preimage);
+    h.finalize().into()
+}
+
 /// Deterministic offer id: blake3(tag || canonical JSON of the payload).
 /// serde_json serializes struct fields in declaration order, so equal
 /// payloads always hash to the same id.
@@ -243,6 +266,48 @@ pub fn offer_id_of(payload: &SwapOfferPayload) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// WG-21: offer-side CLSAG one-time key binding, hex-encoded (64 chars).
+/// It travels as an OPTIONAL Frame-level sidecar on Offer frames: the
+/// maker's GHOST lock will use the one-time address `P = [x] * B` with
+/// key image `I = [x] * H(P)`, so the taker can bind the future lock
+/// before locking XMR. Deliberately NOT hashed into the offer id (v1
+/// ids stay byte-stable); tampering is caught by the fail-closed
+/// structural validation in [`SwapNet::receive_frame`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferAdaptor {
+    /// One-time public key `P`, hex.
+    pub p: String,
+    /// Key image `I`, hex.
+    pub image: String,
+}
+
+impl OfferAdaptor {
+    /// Build the sidecar from derived one-time keys.
+    pub fn from_keys(k: &OneTimeKeys) -> Self {
+        OfferAdaptor {
+            p: hex32(&k.p),
+            image: hex32(&k.image),
+        }
+    }
+
+    /// Structural validation (fail-closed): both fields must be canonical
+    /// 32-byte hex; `P` must decompress to a non-degenerate point; `I`
+    /// must decompress and differ from the identity and from `P`. The
+    /// cryptographic key-image equation is checked at lock/claim time
+    /// (WG-20 legs).
+    pub fn validate(&self) -> Result<OneTimeKeys, SwapNetError> {
+        let p = parse_hex32(&self.p)?;
+        let image = parse_hex32(&self.image)?;
+        if !crate::clsag::validate_one_time_binding(&p, &image) {
+            return Err(SwapNetError::MalformedOffer("bad one-time key binding"));
+        }
+        Ok(OneTimeKeys { p, image })
+    }
+}
+
+/// WG-21: unchanged - the payload still hashes into the offer id exactly
+/// as in v1; the one-time key binding travels as a Frame sidecar and is
+/// deliberately NOT part of the id (offer ids stay byte-stable).
 fn payload_from_offer(offer: &Offer) -> SwapOfferPayload {
     SwapOfferPayload {
         xmr_piconero: offer.xmr_piconero,
@@ -255,6 +320,9 @@ fn payload_from_offer(offer: &Offer) -> SwapOfferPayload {
     }
 }
 
+/// WG-21: the wire payload carries no one-time key fields; the binding
+/// arrives as the Frame sidecar and is validated fail-closed in
+/// [`SwapNet::receive_frame`] before the state machine sees the offer.
 fn offer_from_payload(p: &SwapOfferPayload) -> Result<Offer, SwapNetError> {
     if p.xmr_piconero == 0 || p.ghost_atoms == 0 {
         return Err(SwapNetError::MalformedOffer("zero amount"));
@@ -288,6 +356,9 @@ fn offer_from_payload(p: &SwapOfferPayload) -> Result<Offer, SwapNetError> {
 /// One tracked swap: the [`SwapSession`] state machine plus P2P bookkeeping.
 #[derive(Clone, Debug)]
 pub struct TrackedSession {
+    /// WG-21: the one-time key binding announced by the maker's offer
+    /// sidecar (None for pre-WG-21 offers).
+    pub offer_otk: Option<OneTimeKeys>,
     pub session: SwapSession,
     pub offer_id: [u8; 32],
     /// Peer confirmed acceptance (Accept frame received on maker side).
@@ -389,6 +460,8 @@ impl SwapNet {
 
     /// Maker: register a new offer (preimage is kept locally) and get the
     /// encoded Offer frame to broadcast.
+    /// WG-21: the returned Offer frame embeds the one-time key binding
+    /// derived from `preimage` (sidecar); the id and payload stay v1.
     pub fn publish_offer(
         &mut self,
         offer: Offer,
@@ -397,6 +470,9 @@ impl SwapNet {
         if hashlock_of(&preimage) != offer.hashlock {
             return Err(SwapNetError::State(SwapError::BadPreimage));
         }
+        // WG-21: derive the one-time keys from the preimage and embed
+        // them as the Frame sidecar (validated fail-closed by the taker).
+        let otk = one_time_keys(&otk_seed(&preimage));
         let payload = payload_from_offer(&offer);
         let offer_id = offer_id_of(&payload);
         let mut session = SwapSession::make_offer(offer, 0);
@@ -405,6 +481,7 @@ impl SwapNet {
             offer_id,
             TrackedSession {
                 session,
+                offer_otk: Some(otk.clone()),
                 offer_id,
                 accepted_by_peer: false,
                 peer_refunded: false,
@@ -414,10 +491,11 @@ impl SwapNet {
                 ghost_tx_ref: None,
             },
         );
-        let frame = Frame::new(SwapNetMessage::Offer {
+        let mut frame = Frame::new(SwapNetMessage::Offer {
             offer_id: hex32(&offer_id),
             payload,
         });
+        frame.adaptor = Some(OfferAdaptor::from_keys(&otk));
         Ok((
             hex32(&offer_id),
             encode_frame(&frame).map_err(|e| SwapNetError::Frame(e.to_string()))?,
@@ -506,7 +584,13 @@ impl SwapNet {
         if frame.protocol != PROTOCOL {
             return Err(SwapNetError::ProtocolMismatch(frame.protocol));
         }
-        let replies = self.handle_message(frame.msg, current_height)?;
+        // WG-21: validate the optional offer sidecar fail-closed before
+        // the message reaches the state machine.
+        let otk = match frame.adaptor.as_ref() {
+            Some(a) => Some(a.validate()?),
+            None => None,
+        };
+        let replies = self.handle_message_with_otk(frame.msg, otk.as_ref(), current_height)?;
         replies
             .iter()
             .map(|m| {
@@ -518,15 +602,32 @@ impl SwapNet {
     /// Core protocol transition. `current_height` is used for the taker's
     /// acceptance timestamp on new Offers; lock notifications carry their
     /// own heights.
+    /// WG-21 compatibility shim: process a message with no sidecar OTK.
+    /// Signature UNCHANGED from v1 (net_node-reachable surface).
     pub fn handle_message(
         &mut self,
         msg: SwapNetMessage,
+        current_height: u64,
+    ) -> Result<Vec<SwapNetMessage>, SwapNetError> {
+        self.handle_message_with_otk(msg, None, current_height)
+    }
+
+    /// WG-21: as [`Self::handle_message`], with the offer-side one-time
+    /// key binding decoded from the Frame sidecar (already validated by
+    /// [`Self::receive_frame`]).
+    pub fn handle_message_with_otk(
+        &mut self,
+        msg: SwapNetMessage,
+        otk: Option<&OneTimeKeys>,
         current_height: u64,
     ) -> Result<Vec<SwapNetMessage>, SwapNetError> {
         match msg {
             SwapNetMessage::Offer { offer_id, payload } => {
                 let id = parse_hex32(&offer_id)?;
                 let offer = offer_from_payload(&payload)?;
+                // WG-21: thread the validated sidecar (if any) into the
+                // session record below.
+                let wire_otk = otk.cloned();
                 if offer_id_of(&payload) != id {
                     return Err(SwapNetError::OfferIdMismatch);
                 }
@@ -538,6 +639,7 @@ impl SwapNet {
                     id,
                     TrackedSession {
                         session,
+                        offer_otk: wire_otk,
                         offer_id: id,
                         accepted_by_peer: false,
                         peer_refunded: false,
@@ -622,6 +724,64 @@ impl SwapNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- WG-21: offer-side one-time key binding ------------------------------
+
+    #[test]
+    fn offer_wire_embeds_one_time_key_sidecar() {
+        let mut maker = SwapNet::new();
+        let (id_hex, wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let frame = decode_frame(&wire).unwrap();
+        let otk = frame.adaptor.expect("WG-21 sidecar present");
+        let want = one_time_keys(&otk_seed(&PREIMAGE));
+        assert_eq!(otk.p, hex32(&want.p));
+        assert_eq!(otk.image, hex32(&want.image));
+        otk.validate().unwrap();
+        // the sidecar must not shift the offer id (v1 ids stay stable)
+        assert_eq!(id_hex, hex32(&offer_id_of(&payload())));
+    }
+
+    #[test]
+    fn offer_sidecar_is_validated_fail_closed() {
+        let mut maker = SwapNet::new();
+        let (_, wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let mut frame = decode_frame(&wire).unwrap();
+        let mut bad = frame.adaptor.clone().unwrap();
+        bad.p = "zz".to_string(); // not hex
+        frame.adaptor = Some(bad);
+        let wire = encode_frame(&frame).unwrap();
+        let mut taker = SwapNet::new();
+        assert!(taker.receive_frame(&wire, 100).is_err());
+    }
+
+    #[test]
+    fn pre_wg21_frames_without_sidecar_still_accepted() {
+        // A v1 maker publishes no sidecar; the WG-21 taker must still
+        // track the offer (offer_otk stays None).
+        let mut maker = SwapNet::new();
+        let (_, wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let mut frame = decode_frame(&wire).unwrap();
+        frame.adaptor = None;
+        let wire = encode_frame(&frame).unwrap();
+        let mut taker = SwapNet::new();
+        let replies = taker.receive_frame(&wire, 100).unwrap();
+        assert_eq!(replies.len(), 1);
+        let reply = decode_frame(&replies[0]).unwrap();
+        assert!(matches!(reply.msg, SwapNetMessage::Accept { .. }));
+        let t = taker.session(&hex32(&offer_id_of(&payload()))).unwrap();
+        assert!(t.offer_otk.is_none());
+    }
+
+    #[test]
+    fn offer_sidecar_is_stored_on_accept() {
+        let mut maker = SwapNet::new();
+        let (_, wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let mut taker = SwapNet::new();
+        taker.receive_frame(&wire, 100).unwrap();
+        let t = taker.session(&hex32(&offer_id_of(&payload()))).unwrap();
+        let otk = t.offer_otk.as_ref().expect("sidecar stored");
+        assert_eq!(otk.p, one_time_keys(&otk_seed(&PREIMAGE)).p);
+    }
 
     const PREIMAGE: [u8; 32] = [42u8; 32];
 
@@ -890,6 +1050,7 @@ mod tests {
     fn wrong_protocol_rejected() {
         let mut taker = SwapNet::new();
         let frame = Frame {
+            adaptor: None,
             protocol: "other-proto".to_string(),
             msg: SwapNetMessage::Accept {
                 offer_id: hex32(&[1u8; 32]),

@@ -7,8 +7,9 @@ pub mod swap;
 pub use adaptor::{AdaptorSignature, SwapSecret};
 pub use clsag::{one_time_keys, ClsagAdaptor, OneTimeKeys};
 pub use swap::{SwapEngine, SwapId, SwapState};
+pub use swap_p2p::OfferAdaptor;
 
-pub const BRIDGE_PROTOCOL_VERSION: u32 = 1;
+pub const BRIDGE_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_RELAYER_FEE_BPS: u64 = 100;
 pub mod swap_p2p;
 pub mod xmr_dleq;

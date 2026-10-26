@@ -8,6 +8,7 @@
 //!
 //! ```text
 //!  Offered      : maker publishes Offer {hashlock, amounts, timeouts}
+//!                  plus the WG-21 one-time key sidecar (P, I) on the Frame
 //!  Accepted     : taker accepts; accepted_height recorded
 //!  XmrLocked    : taker's monero-wallet-rpc transfer with
 //!                 payment_id = hashlock, unlock_time = fund timeout
@@ -55,6 +56,8 @@ pub enum SwapError {
 /// A swap offer, serializable for out-of-band exchange.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Offer {
+    // WG-21: the one-time key binding (P, I) travels on the Frame sidecar
+    // (swap_p2p::OfferAdaptor), not here - offer ids stay v1-stable.
     /// XMR amount in piconero (1e12).
     pub xmr_piconero: u64,
     /// GHOST amount in atoms.

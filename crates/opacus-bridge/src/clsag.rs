@@ -98,6 +98,21 @@ pub struct OneTimeKeys {
     pub image: [u8; 32],
 }
 
+/// WG-21: structural (wire-level) validation of a one-time key binding:
+/// both points must decompress, neither may be degenerate (identity or
+/// small-order torsion), and the image must differ from the key. The
+/// cryptographic image equation needs the secret and is checked at
+/// lock/claim time instead.
+pub fn validate_one_time_binding(p: &[u8; 32], image: &[u8; 32]) -> bool {
+    let (Some(pk), Some(img)) = (decompress(p), decompress(image)) else {
+        return false;
+    };
+    if pk.is_small_order() || img.is_small_order() {
+        return false;
+    }
+    pk != img
+}
+
 /// Derive the one-time public key and key image for a spend key.
 pub fn one_time_keys(sk: &[u8; 32]) -> OneTimeKeys {
     let x = Scalar::from_bytes_mod_order(*sk);
@@ -106,6 +121,8 @@ pub fn one_time_keys(sk: &[u8; 32]) -> OneTimeKeys {
     OneTimeKeys {
         p: p.to_bytes(),
         image: image.compress().to_bytes(),
+        // WG-21: (p, image) travel on the wire as the offer-side binding
+        // (swap_p2p::OfferAdaptor); derivation stays deterministic here.
     }
 }
 
@@ -282,6 +299,9 @@ impl ClsagAdaptor {
         if (t * B).compress().to_bytes() != adaptor.t_point {
             return None;
         }
+        // WG-21: the offer sidecar pre-binds (P, I) so the taker can
+        // refuse mismatched locks before locking XMR; this check stays
+        // the key-image leg of completed-signature recovery.
         if (t * hp(p)).compress().to_bytes() != adaptor.t_point_h {
             return None;
         }

@@ -80,6 +80,8 @@ impl SwapService {
     // -- wallet-driven choreography (frames pushed to connected peers) ------
 
     /// Maker: register + broadcast an offer; returns the hex offer id.
+    /// WG-21: the broadcast Offer frame embeds the one-time key binding
+    /// derived from `preimage` (sidecar validated fail-closed by peers).
     pub fn publish_offer(&self, offer: &Offer, preimage: &[u8; 32]) -> Result<String, NetError> {
         self.node.broadcast_offer(offer, preimage)
     }
@@ -284,6 +286,25 @@ mod tests {
             max_peers: 8,
             bootstrap_nodes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn offer_sidecar_reaches_taker_session() {
+        let maker = SwapService::spawn(&net_cfg()).unwrap();
+        let taker = SwapService::spawn(&net_cfg()).unwrap();
+        let maddr = maker.node().local_addr().unwrap().to_string();
+        let taddr = taker.node().local_addr().unwrap().to_string();
+        maker.node().connect(&taddr).unwrap();
+        taker.node().connect(&maddr).unwrap();
+        maker.set_height(1000);
+        taker.set_height(1000);
+        let id = maker.publish_offer(&offer(), &PREIMAGE).unwrap();
+        wait_until(10, || taker.session_count() == 1);
+        let s = taker.session(&id).expect("offer tracked");
+        assert!(
+            s.offer_otk.is_some(),
+            "WG-21 sidecar must reach the taker session"
+        );
     }
 
     fn offer() -> Offer {

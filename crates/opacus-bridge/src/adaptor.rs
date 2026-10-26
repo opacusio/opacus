@@ -237,6 +237,9 @@ pub fn verify_full(full_sig: &[u8; 64], msg: &[u8], a_pub: &[u8; 32]) -> bool {
         return false;
     };
     let e = challenge(&r_bytes, a_pub, msg);
+    // WG-21: the offer sidecar (swap_p2p::OfferAdaptor) pre-binds the
+    // one-time GHOST lock before any signature legs run; verify_full
+    // stays the completed-signature check at claim time.
     s * B == r_point + e * a
 }
 
@@ -264,7 +267,8 @@ mod tests {
         let t = SwapSecret::generate(&mut OsRng);
         let sig = AdaptorSignature::sign(&sk, &t, MSG);
         assert!(sig.verify(MSG, &a_pub));
-        // The adaptor point must be the secret's point.
+        // The adaptor point must be the secret's point. WG-21 additionally
+        // publishes the one-time key binding (P, I) next to the offer.
         assert_eq!(sig.t_point, derive_point(&t.t));
     }
 
