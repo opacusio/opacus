@@ -11,7 +11,17 @@ with Zcash-style Halo2 FCMP++ spend proofs, plus an Ethereum-side wrapped
 token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
+
+### Added
+
+- `bip39` 3.0 dependency (rust-bitcoin org, `zeroize` feature) via
+  `[workspace.dependencies]`.
+- Official BIP-39 English test vectors in opacus-crypto: seed round-trips,
+  12/15/18/24-word acceptance, checksum/wordlist rejection, passphrase
+  separation, v1 rejection, deterministic-RNG generate test.
+
 ### Changed
+
 - **BREAKING (wallet keys)**: `SpendingKey` now uses standard BIP-39 English
   mnemonics (ADR r5-bip39-mnemonics, WG-25). `generate()` draws 256-bit entropy
   from the injected CSPRNG and yields a 24-word phrase; the restore path
@@ -20,16 +30,6 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   re-tagged to `ghost_spend_derive_v2` / `ghost_view_derive_v2` over the BIP-39
   seed. v1 pseudo-mnemonics ("ghost <hex chunks>") are rejected - testnet-only
   keys, no migration path.
-
-### Added
-- `bip39` 3.0 dependency (rust-bitcoin org, `zeroize` feature) via
-  `[workspace.dependencies]`.
-- Official BIP-39 English test vectors in opacus-crypto: seed round-trips,
-  12/15/18/24-word acceptance, checksum/wordlist rejection, passphrase
-  separation, v1 rejection, deterministic-RNG generate test.
-
-
-### Changed
 
 - opacus-zk (WG-17): process-wide keyset cache for the v4 spend prover -
   `Params` keyed by k, vk/pk keyed by (DEPTH, n_in, n_out). Keygen is a

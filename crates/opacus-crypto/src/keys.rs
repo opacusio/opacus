@@ -61,7 +61,7 @@ impl SpendingKey {
     }
 
     fn from_parts(mnemonic: Mnemonic, passphrase: &str) -> Self {
-        let seed: [u8; 64] = mnemonic.to_seed(passphrase);
+        let mut seed: [u8; 64] = mnemonic.to_seed(passphrase);
         let mut h = Hasher::new();
         h.update(b"ghost_spend_derive_v2");
         h.update(&seed);
@@ -70,6 +70,7 @@ impl SpendingKey {
         h.update(b"ghost_view_derive_v2");
         h.update(&seed);
         let view: [u8; 32] = h.finalize().into();
+        seed.zeroize();
         Self {
             spend_key: spend,
             view_key: view,
@@ -157,7 +158,7 @@ mod tests {
 
     #[test]
     fn wordlist_rejection_and_v1_rejected() {
-        // v1-style pseudo-mnemonic: 12 tokens, none in the wordlist
+        // v1-style pseudo-mnemonic: 11 hex-chunk tokens are not words ('ghost' itself is BIP-39 English word 780)
         let v1 =
             "ghost 0a1b2c 1b2c3d 2c3d4e 3d4e5f 4e5f60 5f6061 606162 616263 626364 636465 646566";
         assert!(SpendingKey::from_mnemonic(v1).is_err());
