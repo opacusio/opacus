@@ -175,6 +175,13 @@ pub struct SwapNodeConfig {
     /// v0.1 never evicts sessions, so the cap also bounds the
     /// registry's lifetime.
     pub max_sessions: usize,
+    /// Hard cap on concurrently LIVE connections (WG-23, R3). Mirrors
+    /// the net-plane Net-3 bound (max_conns): a NEW connection arriving
+    /// while live_conns is at the cap is dropped at conn_loop entry -
+    /// the socket closes, a Rejected event marks the drop, and
+    /// already-admitted connections keep their exact semantics. The
+    /// slot is released on every exit path via an RAII guard.
+    pub max_connections: usize,
     /// INITIAL block height; afterwards the live value is driven by
     /// [`SwapNode::set_height`] (opacusd feeds it per accepted block).
     pub current_height: u64,
@@ -188,6 +195,7 @@ impl Default for SwapNodeConfig {
             read_timeout: Duration::from_secs(30),
             max_frame_len: 1_048_576,
             max_sessions: 64,
+            max_connections: 128,
             current_height: 0,
         }
     }
@@ -227,6 +235,20 @@ pub enum NodeEvent {
 
 const EVENT_CAP: usize = 1024;
 
+/// WG-23 (R3): RAII guard releasing one live-connection slot on every
+/// conn_loop exit path - normal return, protocol error, idle
+/// disconnect or panic. Mirrors the net-plane Net-3 bookkeeping.
+struct ConnGuard {
+    counter: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.counter
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn msg_kind(m: &SwapNetMessage) -> &'static str {
     match m {
         SwapNetMessage::Offer { .. } => "Offer",
@@ -246,6 +268,9 @@ pub struct SwapNode {
     cfg: SwapNodeConfig,
     /// Live chain tip; every protocol step reads it fresh.
     height: Arc<AtomicU64>,
+    /// WG-23 (R3): count of currently live connections; admission at
+    /// conn_loop entry is capped by cfg.max_connections.
+    live_conns: Arc<std::sync::atomic::AtomicUsize>,
     listener: TcpListener,
     net: Arc<Mutex<SwapNet>>,
     /// Write halves of all dialed peers (used by send_wire).
@@ -262,6 +287,7 @@ impl SwapNode {
         let node = Arc::new(SwapNode {
             cfg,
             height,
+            live_conns: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             listener,
             net: Arc::new(Mutex::new(SwapNet::new())),
             outbound: Arc::new(Mutex::new(Vec::new())),
@@ -461,6 +487,28 @@ impl SwapNode {
     /// Any protocol violation closes the connection (no Error frame in
     /// v0.1); an idle peer is disconnected after the read timeout.
     fn conn_loop(node: &SwapNode, mut io: TcpStream) {
+        // WG-23 (R3): bound the live-connection pool BEFORE any
+        // per-connection work. A NEW connection arriving while the
+        // counter is at max_connections is dropped immediately: the
+        // socket closes, a Rejected event marks the drop and no handler
+        // loop runs. Already-admitted connections keep their exact
+        // semantics. The fetch_add/fetch_sub pair keeps the admission
+        // decision atomic; the guard releases the slot on every exit
+        // path (disconnect, protocol error, panic).
+        let live = node
+            .live_conns
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if live >= node.cfg.max_connections {
+            node.live_conns
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            node.log(NodeEvent::Rejected(format!(
+                "connection cap reached ({live} live)"
+            )));
+            return;
+        }
+        let _conn_guard = ConnGuard {
+            counter: Arc::clone(&node.live_conns),
+        };
         io.set_read_timeout(Some(node.cfg.read_timeout)).ok();
         io.set_nodelay(true).ok();
         let peer = io
@@ -1055,6 +1103,95 @@ mod tests {
         assert_eq!(node.net().lock().unwrap().session_count(), 1);
     }
 
+    /// WG-23 (R3): a NEW connection arriving while live_conns is at
+    /// max_connections is dropped - no PeerConnected event for it, a
+    /// Rejected event marks the drop, and the already-admitted
+    /// connection keeps working (the cap only gates NEW connections,
+    /// Net-3 semantics).
+    #[test]
+    fn conn_flood_capped_in_process() {
+        let cfg = SwapNodeConfig {
+            max_connections: 1,
+            ..test_cfg()
+        };
+        let node = SwapNode::start(cfg).unwrap();
+        let addr = node.local_addr().unwrap();
+
+        let c1 = std::net::TcpStream::connect(addr).unwrap();
+        wait_until(5, || {
+            node.events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::PeerConnected(_)))
+        });
+
+        // the flood: NEW connections at cap are dropped; only the
+        // Rejected event marks them, the peer count stays at one
+        let c2 = std::net::TcpStream::connect(addr).unwrap();
+        let c3 = std::net::TcpStream::connect(addr).unwrap();
+        wait_until(5, || {
+            node.events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::Rejected(m) if m.contains("connection cap")))
+        });
+        let connected = node
+            .events()
+            .iter()
+            .filter(|e| matches!(e, NodeEvent::PeerConnected(_)))
+            .count();
+        assert_eq!(connected, 1);
+        drop(c1);
+        drop(c2);
+        drop(c3);
+    }
+
+    /// WG-23 (R3): the live slot is RELEASED when the admitted
+    /// connection goes away - after c1 disconnects, a NEW connection is
+    /// admitted again (the RAII guard covers every exit path).
+    #[test]
+    fn conn_cap_released_on_disconnect() {
+        let cfg = SwapNodeConfig {
+            max_connections: 1,
+            ..test_cfg()
+        };
+        let node = SwapNode::start(cfg).unwrap();
+        let addr = node.local_addr().unwrap();
+
+        let c1 = std::net::TcpStream::connect(addr).unwrap();
+        wait_until(5, || {
+            node.events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::PeerConnected(_)))
+        });
+
+        // at cap: a NEW connection is rejected
+        let c2 = std::net::TcpStream::connect(addr).unwrap();
+        wait_until(5, || {
+            node.events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::Rejected(m) if m.contains("connection cap")))
+        });
+        drop(c2);
+
+        // c1 disconnects -> the slot is released
+        drop(c1);
+        wait_until(5, || {
+            node.events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::PeerDisconnected(_)))
+        });
+
+        // and the next NEW connection is admitted again
+        let c3 = std::net::TcpStream::connect(addr).unwrap();
+        wait_until(5, || {
+            let seen = node
+                .events()
+                .iter()
+                .filter(|e| matches!(e, NodeEvent::PeerConnected(_)))
+                .count();
+            seen == 2
+        });
+        drop(c3);
+    }
     /// The offerId binding: a tampered payload (same offer_id) is rejected
     /// by the node's protocol step.
     #[test]
