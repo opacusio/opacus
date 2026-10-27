@@ -21,6 +21,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 curve25519-dalek = { version = "4.1", features = ["serde", "rand_core"] }
+bip39 = { version = "3.0", features = ["zeroize"] }
 blake3 = "1.5"
 sha3 = "0.10"
 rand = "0.8"
