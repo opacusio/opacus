@@ -23,7 +23,7 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-$ProjectRoot = 'C:\Users\Mi\projects\ghost'
+$ProjectRoot = $PSScriptRoot
 $KeyFile     = Join-Path $ProjectRoot 'deployer.key'
 $Cast        = Join-Path $ProjectRoot 'tools\foundry\cast.exe'
 

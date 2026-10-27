@@ -33,7 +33,7 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-$ProjectRoot = 'C:\Users\Mi\projects\ghost'
+$ProjectRoot = $PSScriptRoot
 $RepoUrl     = 'https://github.com/opacusio/opacus.git'
 $GiFile      = Join-Path $ProjectRoot '.gitignore'
 $ReadMe      = Join-Path $ProjectRoot 'README.md'

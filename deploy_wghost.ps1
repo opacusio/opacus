@@ -26,7 +26,7 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 $Contracts = Join-Path $ProjectRoot "contracts"
 $Sol = Join-Path $Contracts "wGHOST.sol"
 $Toml = Join-Path $Contracts "foundry.toml"

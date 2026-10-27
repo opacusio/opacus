@@ -28,7 +28,7 @@
 
 $ErrorActionPreference = "Stop"
 
-$Target = "C:\Users\Mi\projects\ghost\deploy_wghost.ps1"
+$Target = "$PSScriptRoot\deploy_wghost.ps1"
 $Bak    = "$Target.bak-solfix1"
 
 if (-not (Test-Path -LiteralPath $Target)) {

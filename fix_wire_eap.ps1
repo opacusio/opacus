@@ -27,7 +27,7 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 $Target = Join-Path $ProjectRoot "wire_opacusd_swap.ps1"
 
 if (-not (Test-Path -LiteralPath $Target)) {

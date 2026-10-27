@@ -7,7 +7,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 Write-Host "=== ghost-zk fix: rewriting crates/ghost-zk with verified code ===" -ForegroundColor Cyan
 

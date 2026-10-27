@@ -9,7 +9,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 Write-Host "=== Ghost: Monero bridge + Uniswap integration ===" -ForegroundColor Cyan
 

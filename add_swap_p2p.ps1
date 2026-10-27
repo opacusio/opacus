@@ -10,7 +10,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 Write-Host "=== Ghost: swap P2P layer + wGHOST deploy kit ===" -ForegroundColor Cyan
 

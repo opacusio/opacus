@@ -8,7 +8,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 Write-Host "=== ghost-wallet: shielded tx flow in LightWallet ===" -ForegroundColor Cyan
 

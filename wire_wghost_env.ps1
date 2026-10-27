@@ -20,7 +20,7 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 $Wg = Join-Path $ProjectRoot "crates\opacus-dex\src\wghost.rs"
 
 if (-not (Test-Path -LiteralPath $Wg)) {

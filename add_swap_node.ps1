@@ -14,7 +14,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 Write-Host "=== Ghost: swap P2P node in opacus-network ===" -ForegroundColor Cyan
 

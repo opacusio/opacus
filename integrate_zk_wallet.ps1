@@ -8,7 +8,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 Write-Host "=== ghost-wallet zk integration: adding zk_spend module ===" -ForegroundColor Cyan
 

@@ -37,7 +37,7 @@
 $ErrorActionPreference = "Stop"
 
 # ---- adjust if your project lives elsewhere ----
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 $tomlPath = Join-Path $ProjectRoot "crates\opacus-bridge\Cargo.toml"
 $rootToml = Join-Path $ProjectRoot "Cargo.toml"
 

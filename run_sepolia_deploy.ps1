@@ -27,7 +27,7 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
-$ProjectRoot = 'C:\Users\Mi\projects\ghost'
+$ProjectRoot = $PSScriptRoot
 $Contracts   = Join-Path $ProjectRoot 'contracts'
 $ToolsDir    = Join-Path $ProjectRoot 'tools\foundry'
 $Forge       = Join-Path $ToolsDir 'forge.exe'

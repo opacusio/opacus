@@ -14,7 +14,7 @@
 #   7. cargo test -p opacus-node --release
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = "C:\Users\Mi\projects\ghost"
+$ProjectRoot = "$PSScriptRoot"
 
 # ---------------------------------------------------------------------------
 # helpers
