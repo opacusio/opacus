@@ -245,15 +245,9 @@ Test status (zero warnings in all crates):
 | opacus-dex | 14 |
 | opacus-network | 67 |
 
-Performance: a membership-only spend proof at mainnet tree depth (2^32
-leaves) proves and verifies in about 2.1 s. The full v4 spend pipeline
-(real IPA, k = 13) runs on a process-wide keyset cache (WG-17): the
-first prove of a process pays the one-time keygen (~16 s cold), every
-later prove runs at steady-state 7.3-8.0 s and verification drops to
-about 0.1 s - inside the 10 s budget [S4 8]. The budget is enforced on
-the steady-state number by `cargo bench -p opacus-zk --features
-real-prover --bench prover`; the cold-start number is recorded there
-for the future EC-chain column / membership-path work.
+Performance: a membership-only spend proof at mainnet tree depth (2^32 leaves) proves and verifies in about 2.1 s.
+The full v4 spend pipeline (real IPA, k = 13) runs on a process-wide keyset cache (WG-17): the first prove of a process pays the one-time keygen (~16 s cold), every later prove runs at steady-state 7.3-8.0 s and verification drops to about 0.1 s - inside the 10 s budget [S4 8].
+The budget is enforced on the steady-state number by `cargo bench -p opacus-zk --features real-prover --bench prover`; the cold-start number is recorded there for the future EC-chain column / membership-path work.
 
 ## Sepolia deployment (zero-typing PowerShell chain)
 
