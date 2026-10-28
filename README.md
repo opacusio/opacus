@@ -92,7 +92,7 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   H_leaf*G3 term computed in-circuit as public instances), leaf-v2 note
   commitments, nullifier_v4 linking, and the full V4SpendCircuit - 1-in /
   2-out topology (MAX_IN = 2, MAX_OUT = 4), balance padding, 15-slot
-  normative instance vector, binding signature, k = 13 at tree depth 2^32 -
+  normative instance vector, binding signature, k = 11 at tree depth 2^32 -
   with a mock-prover self-check and a real IPA prover path.
 - Real (non-mock) prover/verifier behind the `real-prover` feature: batch
   create_proof and plonk::SingleVerifier verification on
