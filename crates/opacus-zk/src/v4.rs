@@ -83,6 +83,34 @@ pub fn dom_nu() -> Fp {
     fp_from_label(b"GHOST/v4/dom/nu")
 }
 
+/// Domain constant for swap hashlocks [S4 12, WG-26].
+pub fn dom_swap() -> Fp {
+    fp_from_label(b"GHOST/v4/dom/swap")
+}
+
+/// Split a 32-byte swap preimage into two canonical 16-byte lanes [S4 12
+/// 3.1]: each lane carries exactly 128 bits, so the field reduction never
+/// wraps and the lane pair round-trips the preimage byte-for-byte.
+pub fn swap_lanes(preimage: &[u8; 32]) -> (Fp, Fp) {
+    let lane = |s: usize| {
+        let mut b = [0u8; 16];
+        b.copy_from_slice(&preimage[s..s + 16]);
+        let lo = u64::from_le_bytes(b[0..8].try_into().unwrap());
+        let hi = u64::from_le_bytes(b[8..16].try_into().unwrap());
+        let two64 = Fp::from(u64::MAX) + Fp::ONE;
+        Fp::from(hi) * two64 + Fp::from(lo)
+    };
+    (lane(0), lane(16))
+}
+
+/// Swap hashlock commitment [S4 12 3.1]: H = Poseidon_3(dom_swap, s0, s1)
+/// over the canonical lanes of the 32-byte preimage. The bridge blake3
+/// hashlock_of stays the XMR-leg lock; one preimage feeds both chains.
+pub fn hashlock_swap(preimage: &[u8; 32]) -> (Fp, Fp, Fp) {
+    let (s0, s1) = swap_lanes(preimage);
+    (poseidon_absorb(dom_swap(), s0, s1)[0], s0, s1)
+}
+
 // ---------------------------------------------------------------------------
 // hashgen [S4 2]
 // ---------------------------------------------------------------------------
@@ -962,4 +990,62 @@ mod tests {
     const VALUE_GEN_HEX: &str = "aa6ee3702b714724c674cd327429f8574f821b1160a0b83929a2b5ee967c0b05";
     const BLIND_GEN_HEX: &str = "ef50f50cf65eb62760ff7d35c03356fc4fac2728b39805b73e20ef7473b4cfb2";
     const LEAF_GEN_HEX: &str = "cfa9b76b3ef032d07635c7faafc029305f548fe634fdd9634b1df44ac441b50a";
+}
+
+// ---------------------------------------------------------------------------
+// WG-26 swap hashlock primitives [S4 12]
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod swap_wg26_tests {
+    use super::*;
+
+    const PREIMAGE_A: [u8; 32] = [
+        0x2a, 0xb3, 0x11, 0x7c, 0x0f, 0xe4, 0x5d, 0x92, 0x68, 0x01, 0xda, 0x4f, 0xc3, 0x76, 0x18,
+        0xa9, 0x5e, 0x20, 0xbb, 0x87, 0x6c, 0xf1, 0x03, 0x49, 0xd0, 0xaa, 0x5b, 0x16, 0xe7, 0x82,
+        0x39, 0x4c,
+    ];
+    const PREIMAGE_B: [u8; 32] = [
+        0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe, 0x00, 0x22, 0x44, 0x66, 0x88, 0xaa, 0xcc,
+        0xee, 0x1f, 0x3e, 0x5d, 0x7c, 0x9b, 0xba, 0xd9, 0xf8, 0x07, 0x26, 0x45, 0x64, 0x83, 0xa2,
+        0xc1, 0xe0,
+    ];
+
+    #[test]
+    fn dom_swap_is_the_frozen_label() {
+        assert_eq!(dom_swap(), fp_from_label(b"GHOST/v4/dom/swap"));
+        assert_ne!(dom_swap(), dom_leaf_v2());
+        assert_ne!(dom_swap(), dom_nk());
+        assert_ne!(dom_swap(), dom_nu());
+    }
+
+    #[test]
+    fn lanes_roundtrip_and_stay_canonical() {
+        let (s0, s1) = swap_lanes(&PREIMAGE_A);
+        // Canonical 128-bit lanes: the top half of the canonical
+        // representation stays zero, and the low half IS the preimage chunk.
+        for (lane, chunk) in [(s0, 0usize), (s1, 16usize)] {
+            let r = lane.to_repr();
+            let b = r.as_ref();
+            assert!(b[16..32].iter().all(|x| *x == 0));
+            assert_eq!(&b[0..16], &PREIMAGE_A[chunk..chunk + 16]);
+        }
+        // Distinct preimages split into distinct lane pairs.
+        let (t0, t1) = swap_lanes(&PREIMAGE_B);
+        assert_ne!((s0, s1), (t0, t1));
+    }
+
+    #[test]
+    fn hashlock_swap_matches_the_poseidon_convention() {
+        let (h, s0, s1) = hashlock_swap(&PREIMAGE_A);
+        let (r0, r1) = swap_lanes(&PREIMAGE_A);
+        assert_eq!((s0, s1), (r0, r1));
+        assert_eq!(h, poseidon_absorb(dom_swap(), s0, s1)[0]);
+        // Deterministic, preimage-sensitive, nonzero (H = 0 is reserved).
+        let (h2, _, _) = hashlock_swap(&PREIMAGE_A);
+        assert_eq!(h, h2);
+        let (h3, _, _) = hashlock_swap(&PREIMAGE_B);
+        assert_ne!(h, h3);
+        assert!(h != Fp::ZERO);
+    }
 }

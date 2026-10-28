@@ -122,8 +122,27 @@ pub const VALUE_REGION_ROWS: usize = 1 + N_LIMBS + 2 * 16;
 /// Rows of the leaf chain: init row + 16 rows for `[s] * G` + 16 rows for
 /// `[h] * G3`.
 pub const LEAF_CHAIN_ROWS: usize = 1 + 2 * 16;
-/// Instance slots of the normative v4 spend instance vector [S4 8].
-pub const SPEND_INSTANCE_SLOTS: usize = 1 + MAX_IN + 2 * MAX_IN + 2 * MAX_OUT;
+/// Instance slots of the normative v4 spend instance vector [S4 8] with the
+/// WG-26 swap tail [S4 12]: 15 base slots + 6 swap slots.
+pub const SPEND_INSTANCE_SLOTS: usize = 1 + MAX_IN + 2 * MAX_IN + 2 * MAX_OUT + 6;
+
+/// WG-26 [S4 12]: public swap material of one transaction, published in
+/// instance slots 15..20 (flag, swap_idx, H, s0, s1, spent_swap_entry).
+#[derive(Clone, Debug)]
+pub struct SwapPub {
+    /// Swap mode: 0 plain, 1 lock, 2 claim, 3 refund.
+    pub flag: u8,
+    /// 1-based note index the swap applies to (0 = none).
+    pub idx: u8,
+    /// Hashlock commitment H = Poseidon_3(dom_swap, s0, s1).
+    pub h: Fp,
+    /// Preimage lane 0 (claim only; zero otherwise).
+    pub s0: Fp,
+    /// Preimage lane 1 (claim only; zero otherwise).
+    pub s1: Fp,
+    /// Tree entry of the spent swap input (claim/refund; zero otherwise).
+    pub entry: Fp,
+}
 
 // ---------------------------------------------------------------------------
 // v0.4 domain constant for the accumulator tree entry [S4 2]
@@ -179,6 +198,19 @@ pub fn tree_rep(l: &pallas::Point) -> Fp {
 /// `tree_entry(leaf_v2(D, a, b, v, rho))`.
 pub fn leaf_entry_v2(d: Fp, a: Fp, b: Fp, v: u64, rho: Fp) -> Fp {
     tree_rep(&leaf_v2(d, a, b, v, rho))
+}
+
+/// WG-26 [S4 12]: swap-variant accumulator entry of a note whose leaf
+/// absorbs the public hashlock H:
+/// `h_swap = P(h_leaf, H, 0)`, `L' = P(D, a+b, a*b) + h_swap * G3`,
+/// `entry' = tree_rep(L')`. The lock publishes this entry in the tree; a
+/// plain spend of the note then fails membership by construction.
+pub fn swap_leaf_entry_v2(d: Fp, a: Fp, b: Fp, v: u64, rho: Fp, h: Fp) -> Fp {
+    let h_leaf = crate::v4::h_leaf_v2(v, rho);
+    let h_swap = poseidon_absorb(h_leaf, h, Fp::ZERO)[0];
+    let key = crate::v4::p_leaf(d, a + b, a * b);
+    let l = key + crate::v4::leaf_gen() * crate::v4::fq_reduce_fp(h_swap);
+    tree_rep(&l)
 }
 
 // ---------------------------------------------------------------------------
@@ -1262,7 +1294,13 @@ pub struct SpendConfig {
     pub s_add: Selector,
     /// Tree/key quadratic operand gate (`z = a * b`).
     pub s_mul: Selector,
-    /// The normative 15-slot public instance column [S4 8].
+    /// WG-26 swap public row gate (flag/idx/H/s0/s1 algebra) [S4 12].
+    pub s_swap: Selector,
+    /// WG-26 swap select gate (plain vs swap-variant leaf hash) [S4 12].
+    pub s_swap_sel: Selector,
+    /// WG-26 entry publication gate (spent swap entry) [S4 12].
+    pub s_swap_entry: Selector,
+    /// The normative 21-slot public instance column [S4 8, S4 12].
     pub instance: Column<Instance>,
 }
 
@@ -1277,6 +1315,9 @@ impl SpendConfig {
         let tree_prod = meta.advice_column();
         let s_add = meta.selector();
         let s_mul = meta.selector();
+        let s_swap = meta.selector();
+        let s_swap_sel = meta.selector();
+        let s_swap_entry = meta.selector();
         let instance = meta.instance_column();
 
         for c in wit.iter().chain(tree_src.iter()) {
@@ -1304,6 +1345,105 @@ impl SpendConfig {
             vec![sel * (z - a * b)]
         });
 
+        // WG-26 swap gates [S4 12]. The public tail cells (flag, idx, H,
+        // s0, s1) ride one row (s_swap) together with the witness helpers
+        // (nonzero inverses wh/wi, idx indicators eq0/eq1) and the copied
+        // claim-perm output hc. The select gate (s_swap_sel) picks the
+        // swap-variant leaf hash per input; the entry gate (s_swap_entry)
+        // publishes the spent swap entry on the pad row.
+        let two_inv_c = Expression::Constant(Fp::from(2u64).invert().unwrap());
+        let six_inv_c = Expression::Constant(Fp::from(6u64).invert().unwrap());
+        let neg_two_inv_c = Expression::Constant(-Fp::from(2u64).invert().unwrap());
+        let neg_six_inv_c = Expression::Constant(-Fp::from(6u64).invert().unwrap());
+        let c2 = Expression::Constant(Fp::from(2u64));
+        let c3 = Expression::Constant(Fp::from(3u64));
+        let c4 = Expression::Constant(Fp::from(4u64));
+        meta.create_gate("wg26-swap-pub", |meta| {
+            let sel = meta.query_selector(s_swap);
+            let f = meta.query_advice(wit[0], Rotation::cur());
+            let idx = meta.query_advice(wit[1], Rotation::cur());
+            let h = meta.query_advice(wit[2], Rotation::cur());
+            let s0 = meta.query_advice(wit[3], Rotation::cur());
+            let s1 = meta.query_advice(tree_src[0], Rotation::cur());
+            let wh = meta.query_advice(tree_src[1], Rotation::cur());
+            let wi = meta.query_advice(tree_sum, Rotation::cur());
+            let e0 = meta.query_advice(tree_prod, Rotation::cur());
+            let e1 = meta.query_advice(hash.absorb[0], Rotation::cur());
+            let hc = meta.query_advice(hash.state[0], Rotation::cur());
+            let one = Expression::Constant(Fp::ONE);
+            let fm1 = f.clone() - one.clone();
+            let fm2 = f.clone() - c2.clone();
+            let fm3 = f.clone() - c3.clone();
+            let ind0 = fm1.clone() * fm2.clone() * fm3.clone() * neg_six_inv_c.clone();
+            let ind1 = f.clone() * fm2.clone() * fm3.clone() * two_inv_c.clone();
+            let ind2 = f.clone() * fm1.clone() * fm3.clone() * neg_two_inv_c.clone();
+            let ind3 = f.clone() * fm1.clone() * fm2.clone() * six_inv_c.clone();
+            let ind13 = ind1.clone() + ind3.clone();
+            let ind23 = ind2.clone() + ind3.clone();
+            vec![
+                // flag in 0..=3 [S4 12 3.2]
+                sel.clone() * (f * fm1.clone() * fm2.clone() * fm3.clone()),
+                // plain: the whole swap tail is zero (H = 0 reserved)
+                sel.clone() * (ind0.clone() * (h.clone() + s0.clone() + s1.clone() + idx.clone())),
+                // swap modes require H nonzero (witness inverse wh)
+                sel.clone() * ((one.clone() - ind0.clone()) * (h.clone() * wh - one.clone())),
+                // swap modes require idx nonzero (witness inverse wi)
+                sel.clone() * ((one.clone() - ind0.clone()) * (idx.clone() * wi - one.clone())),
+                // lock/refund: preimage lanes zero
+                sel.clone() * (ind13 * (s0.clone() + s1.clone())),
+                // lock: idx in 1..=MAX_OUT
+                sel.clone()
+                    * (ind1
+                        * (idx.clone() - one.clone())
+                        * (idx.clone() - c2.clone())
+                        * (idx.clone() - c3.clone())
+                        * (idx.clone() - c4.clone())),
+                // claim/refund: idx in 1..=MAX_IN
+                sel.clone()
+                    * (ind23.clone() * (idx.clone() - one.clone()) * (idx.clone() - c2.clone())),
+                // claim: the in-circuit preimage check P(dom_swap, s0, s1) = H
+                sel.clone() * (ind2 * (hc - h)),
+                // idx indicator cells (eq0 = 1 at idx = 1, eq1 = 1 at idx = 2)
+                sel.clone() * (e0 + idx.clone() * (idx.clone() - c2.clone())),
+                sel.clone() * (c2.clone() * e1 - idx.clone() * (idx - one.clone())),
+            ]
+        });
+
+        meta.create_gate("wg26-swap-select", |meta| {
+            let sel = meta.query_selector(s_swap_sel);
+            let f = meta.query_advice(wit[0], Rotation::cur());
+            let eq = meta.query_advice(wit[1], Rotation::cur());
+            let hl = meta.query_advice(wit[2], Rotation::cur());
+            let hs = meta.query_advice(wit[3], Rotation::cur());
+            let hsel = meta.query_advice(tree_src[0], Rotation::cur());
+            let one = Expression::Constant(Fp::ONE);
+            let fm1 = f.clone() - one.clone();
+            let fm2 = f.clone() - c2.clone();
+            let fm3 = f.clone() - c3.clone();
+            let ind2 = f.clone() * fm1.clone() * fm3.clone() * neg_two_inv_c.clone();
+            let ind3 = f * fm1 * fm2 * six_inv_c.clone();
+            let ind23 = ind2 + ind3;
+            vec![sel * (hsel - hl.clone() - ind23 * eq * (hs - hl))]
+        });
+
+        meta.create_gate("wg26-swap-entry", |meta| {
+            let sel = meta.query_selector(s_swap_entry);
+            let f = meta.query_advice(wit[1], Rotation::cur());
+            let e0 = meta.query_advice(wit[2], Rotation::cur());
+            let e1 = meta.query_advice(wit[3], Rotation::cur());
+            let big_e0 = meta.query_advice(tree_src[0], Rotation::cur());
+            let big_e1 = meta.query_advice(tree_src[1], Rotation::cur());
+            let pubc = meta.query_advice(tree_sum, Rotation::cur());
+            let one = Expression::Constant(Fp::ONE);
+            let fm1 = f.clone() - one.clone();
+            let fm2 = f.clone() - c2.clone();
+            let fm3 = f.clone() - c3.clone();
+            let ind2 = f.clone() * fm1.clone() * fm3.clone() * neg_two_inv_c.clone();
+            let ind3 = f * fm1 * fm2 * six_inv_c.clone();
+            let ind23 = ind2 + ind3;
+            vec![sel * (pubc - ind23.clone() * e0 * big_e0 - ind23 * e1 * big_e1)]
+        });
+
         Self {
             wit,
             limb,
@@ -1314,6 +1454,9 @@ impl SpendConfig {
             tree_prod,
             s_add,
             s_mul,
+            s_swap,
+            s_swap_sel,
+            s_swap_entry,
             instance,
         }
     }
@@ -1658,6 +1801,26 @@ struct SpendCells {
     rc_in: Vec<Option<(AssignedCell<Fp, Fp>, AssignedCell<Fp, Fp>)>>,
     rc_out: Vec<Option<(AssignedCell<Fp, Fp>, AssignedCell<Fp, Fp>)>>,
     zero_cell: AssignedCell<Fp, Fp>,
+    /// WG-26 [S4 12]: tree entries of the enabled inputs.
+    #[allow(dead_code)] // WG-26 erratum (WP-4): entry cell handles kept but not read
+    e_cells: Vec<Option<AssignedCell<Fp, Fp>>>,
+    /// WG-26 [S4 12]: public swap tail cells (instance slots 15..20).
+    swap_flag: AssignedCell<Fp, Fp>,
+    swap_idx: AssignedCell<Fp, Fp>,
+    swap_h: AssignedCell<Fp, Fp>,
+    swap_s0: AssignedCell<Fp, Fp>,
+    swap_s1: AssignedCell<Fp, Fp>,
+    entry_pub: AssignedCell<Fp, Fp>,
+}
+
+/// WG-26 [S4 12]: local handles for the public swap cells inside the
+/// synthesis closure.
+struct SwapCellsWg26 {
+    flag: AssignedCell<Fp, Fp>,
+    eq0: AssignedCell<Fp, Fp>,
+    eq1: AssignedCell<Fp, Fp>,
+    swap_h: AssignedCell<Fp, Fp>,
+    zero: AssignedCell<Fp, Fp>,
 }
 
 /// The full v4 spend circuit [S4 8]: one proof establishes membership,
@@ -1680,6 +1843,20 @@ pub struct V4SpendCircuit<const DEPTH: usize> {
     /// only): the leaf point, tree entry and root all shift, so an honest
     /// root instance no longer verifies.
     pub corrupt_leaf: Option<usize>,
+    /// WG-26 [S4 12] swap mode flag: 0 plain, 1 lock, 2 claim, 3 refund.
+    pub swap_flag: u8,
+    /// WG-26 swap index: 1-based note number the swap applies to.
+    pub swap_idx: u8,
+    /// WG-26 public hashlock H = Poseidon_3(dom_swap, s0, s1).
+    pub swap_h: Fp,
+    /// WG-26 preimage lane 0 (claim only; zero otherwise).
+    pub swap_s0: Fp,
+    /// WG-26 preimage lane 1 (claim only; zero otherwise).
+    pub swap_s1: Fp,
+    /// Flip one preimage lane of the claim check (negative tests only).
+    pub corrupt_preimage: bool,
+    /// Flip the swap flag cell (negative tests only).
+    pub corrupt_swap_flag: bool,
 }
 
 impl<const DEPTH: usize> V4SpendCircuit<DEPTH> {
@@ -1695,8 +1872,12 @@ impl<const DEPTH: usize> V4SpendCircuit<DEPTH> {
                 + PERM_ROWS               // H_leaf
                 + LEAF_CHAIN_ROWS         // leaf chain [s]G + [h]G3
                 + PERM_ROWS               // tree entry
+                + PERM_ROWS               // WG-26 swap continuation [S4 12]
+                + 1                       // WG-26 swap select row
                 + DEPTH * PERM_ROWS)      // membership path
             + MAX_OUT * VALUE_REGION_ROWS
+            + 1 // WG-26 swap public row (flag/idx/H/s0/s1 + helpers)
+            + PERM_ROWS // WG-26 claim preimage perm
             + 1 // pad-zero row
     }
 
@@ -1725,6 +1906,13 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
             n_out: self.n_out,
             corrupt_limb: self.corrupt_limb,
             corrupt_leaf: self.corrupt_leaf,
+            swap_flag: self.swap_flag,
+            swap_idx: self.swap_idx,
+            swap_h: self.swap_h,
+            swap_s0: self.swap_s0,
+            swap_s1: self.swap_s1,
+            corrupt_preimage: self.corrupt_preimage,
+            corrupt_swap_flag: self.corrupt_swap_flag,
         }
     }
 
@@ -1754,6 +1942,120 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
                     (0..MAX_IN).map(|_| None).collect();
                 let mut rc_out: Vec<Option<(AssignedCell<Fp, Fp>, AssignedCell<Fp, Fp>)>> =
                     (0..MAX_OUT).map(|_| None).collect();
+                let mut e_cells: Vec<Option<AssignedCell<Fp, Fp>>> = Vec::new();
+
+                // WG-26 swap public row [S4 12]: the swap tail cells (flag,
+                // idx, H, s0, s1) plus helper witness cells (nonzero
+                // inverses wh/wi, idx indicators eq0/eq1) and the zero cell
+                // for the continuation absorb. All on ONE row; the claim
+                // preimage perm follows directly so its squeezed output can
+                // be copied back onto this row for the mode-2 check.
+                let pub_row = base;
+                let corrupt_flag = if self.corrupt_swap_flag {
+                    self.swap_flag ^ 1
+                } else {
+                    self.swap_flag
+                };
+                let flag_cell = region.assign_advice(
+                    || "wg26-flag",
+                    config.wit[0],
+                    base,
+                    || Value::known(Fp::from(corrupt_flag as u64)),
+                )?;
+                let idx_cell = region.assign_advice(
+                    || "wg26-idx",
+                    config.wit[1],
+                    base,
+                    || Value::known(Fp::from(self.swap_idx as u64)),
+                )?;
+                let swap_h_cell = region.assign_advice(
+                    || "wg26-h",
+                    config.wit[2],
+                    base,
+                    || Value::known(self.swap_h),
+                )?;
+                let swap_s0_cell = region.assign_advice(
+                    || "wg26-s0",
+                    config.wit[3],
+                    base,
+                    || Value::known(self.swap_s0),
+                )?;
+                let swap_s1_cell = region.assign_advice(
+                    || "wg26-s1",
+                    config.tree_src[0],
+                    base,
+                    || Value::known(self.swap_s1),
+                )?;
+                let _wh_cell = region.assign_advice(
+                    || "wg26-h-inv",
+                    config.tree_src[1],
+                    base,
+                    || Value::known(self.swap_h.invert().unwrap_or(Fp::ZERO)),
+                )?;
+                let _wi_cell = region.assign_advice(
+                    || "wg26-idx-inv",
+                    config.tree_sum,
+                    base,
+                    || Value::known(Fp::from(self.swap_idx as u64).invert().unwrap_or(Fp::ZERO)),
+                )?;
+                let idx_f = Fp::from(self.swap_idx as u64);
+                let eq0_val = Fp::ZERO - idx_f * (idx_f - Fp::from(2u64));
+                let eq1_val = idx_f * (idx_f - Fp::ONE) * Fp::from(2u64).invert().unwrap();
+                let eq0_cell = region.assign_advice(
+                    || "wg26-eq0",
+                    config.tree_prod,
+                    base,
+                    || Value::known(eq0_val),
+                )?;
+                let eq1_cell = region.assign_advice(
+                    || "wg26-eq1",
+                    config.hash.absorb[0],
+                    base,
+                    || Value::known(eq1_val),
+                )?;
+                let swap_zero_cell = region.assign_advice(
+                    || "wg26-absorb-zero",
+                    config.hash.absorb[1],
+                    base,
+                    || Value::known(Fp::ZERO),
+                )?;
+                config.s_swap.enable(&mut region, base)?;
+                let swap_cells = SwapCellsWg26 {
+                    flag: flag_cell,
+                    eq0: eq0_cell,
+                    eq1: eq1_cell,
+                    swap_h: swap_h_cell.clone(),
+                    zero: swap_zero_cell,
+                };
+                base += 1;
+
+                // WG-26 claim preimage perm [S4 12]: Hc = P(dom_swap, s0, s1),
+                // computed unconditionally; the mode-2 gate compares the
+                // copied output against the public H.
+                let claim_s0 = if self.corrupt_preimage {
+                    region.assign_advice(
+                        || "wg26-corrupt-preimage",
+                        config.hash.dom_in,
+                        pub_row,
+                        || Value::known(self.swap_s0 + Fp::ONE),
+                    )?
+                } else {
+                    swap_s0_cell.clone()
+                };
+                let hc_cell = config.perm(
+                    &mut region,
+                    base,
+                    crate::v4::dom_swap(),
+                    claim_s0,
+                    swap_s1_cell.clone(),
+                )?;
+                hc_cell.copy_advice(
+                    || "wg26-hc-copy",
+                    &mut region,
+                    config.hash.state[0],
+                    pub_row,
+                )?;
+                base += PERM_ROWS;
 
                 for i in 0..MAX_IN {
                     if i >= self.n_in {
@@ -1841,18 +2143,72 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
                         config.perm(&mut region, base, dom_leaf_v2(), v_cell, rho_cell.clone())?;
                     base += PERM_ROWS;
 
+                    // WG-26 swap continuation [S4 12]: h_swap = P(h_leaf, H, 0)
+                    // with the plain leaf hash in the witness-domain slot.
+                    // Computed for EVERY enabled input; the select gate below
+                    // picks it only for the swap input of a claim/refund.
+                    let h_swap_cell = config.perm_wd(
+                        &mut region,
+                        base,
+                        &h_cell,
+                        swap_cells.swap_h.clone(),
+                        swap_cells.zero.clone(),
+                    )?;
+                    base += PERM_ROWS;
+
+                    // WG-26 swap select row [S4 12]: h_sel = h_leaf + ind *
+                    // (h_swap - h_leaf) with ind = ind23(flag) * eq_i(idx)
+                    // over PUBLIC cells only (no witness branching). The leaf
+                    // chain consumes h_sel, so a locked note is spendable
+                    // only through its swap-derived leaf.
+                    let is_swap_input = (self.swap_flag == 2 || self.swap_flag == 3)
+                        && self.swap_idx == (i as u8) + 1;
+                    let h_leaf_val = h_cell.value().cloned();
+                    let h_sel_val = if is_swap_input {
+                        h_swap_cell.value().cloned()
+                    } else {
+                        h_leaf_val
+                    };
+                    let h_sel_cell = region.assign_advice(
+                        || "wg26-h-sel",
+                        config.tree_src[0],
+                        base,
+                        || h_sel_val,
+                    )?;
+                    swap_cells.flag.copy_advice(
+                        || "wg26-sel-f",
+                        &mut region,
+                        config.wit[0],
+                        base,
+                    )?;
+                    let eq_src = if i == 0 {
+                        &swap_cells.eq0
+                    } else {
+                        &swap_cells.eq1
+                    };
+                    eq_src.copy_advice(|| "wg26-sel-eq", &mut region, config.wit[1], base)?;
+                    h_cell.copy_advice(|| "wg26-sel-hl", &mut region, config.wit[2], base)?;
+                    h_swap_cell.copy_advice(|| "wg26-sel-hs", &mut region, config.wit[3], base)?;
+                    config.s_swap_sel.enable(&mut region, base)?;
+                    base += 1;
+
                     // Leaf chain [S4 3, S4 8]: L = [s] * G + [h] * G3 as one
-                    // multi-base fixed-base accumulation.
+                    // multi-base fixed-base accumulation. The h scalar is the
+                    // SELECTED leaf hash; the key scalar stays plain.
                     let sh_val: Value<(Fp, Fp)> = inp.clone().map(|n| {
                         let s0 = poseidon_absorb(n.d, n.a + n.b, n.a * n.b)[0];
-                        let h0 = h_leaf_v2(n.v, n.rho);
+                        let h0 = if is_swap_input {
+                            poseidon_absorb(h_leaf_v2(n.v, n.rho), self.swap_h, Fp::ZERO)[0]
+                        } else {
+                            h_leaf_v2(n.v, n.rho)
+                        };
                         (s0, h0)
                     });
                     let (lx, ly) = config.assign_leaf_chain(
                         &mut region,
                         base,
                         &s_cell,
-                        &h_cell,
+                        &h_sel_cell,
                         sh_val,
                         self.corrupt_leaf == Some(i),
                     )?;
@@ -1861,6 +2217,7 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
                     // Tree entry (Phase 2 convention):
                     // e = P(L.x, L.y, DOM_ACC).
                     let e_cell = config.perm(&mut region, base, dom_acc(), lx, ly)?;
+                    e_cells.push(Some(e_cell.clone()));
                     base += PERM_ROWS;
 
                     // Membership path [S4 1 P1]: DEPTH commutative tree steps
@@ -1900,12 +2257,63 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
                     || Value::known(Fp::ZERO),
                 )?;
 
+                // WG-26 entry publication row [S4 12]: entry_pub equals the
+                // tree entry of the spent swap input for claim/refund and is
+                // ZERO for plain and lock transactions (ind23 = 0).
+                swap_cells
+                    .flag
+                    .copy_advice(|| "wg26-entry-f", &mut region, config.wit[1], base)?;
+                swap_cells
+                    .eq0
+                    .copy_advice(|| "wg26-entry-e0", &mut region, config.wit[2], base)?;
+                swap_cells
+                    .eq1
+                    .copy_advice(|| "wg26-entry-e1", &mut region, config.wit[3], base)?;
+                let e0_src = match e_cells.first() {
+                    Some(Some(c)) => c.clone(),
+                    _ => zero_cell.clone(),
+                };
+                let e1_src = match e_cells.get(1) {
+                    Some(Some(c)) => c.clone(),
+                    _ => zero_cell.clone(),
+                };
+                e0_src.copy_advice(|| "wg26-entry-E0", &mut region, config.tree_src[0], base)?;
+                e1_src.copy_advice(|| "wg26-entry-E1", &mut region, config.tree_src[1], base)?;
+                let is_claim_refund = self.swap_flag == 2 || self.swap_flag == 3;
+                let entry_val = if is_claim_refund && self.swap_idx == 1 {
+                    match e_cells.first() {
+                        Some(Some(c)) => c.value().cloned(),
+                        _ => Value::known(Fp::ZERO),
+                    }
+                } else if is_claim_refund && self.swap_idx == 2 {
+                    match e_cells.get(1) {
+                        Some(Some(c)) => c.value().cloned(),
+                        _ => Value::known(Fp::ZERO),
+                    }
+                } else {
+                    Value::known(Fp::ZERO)
+                };
+                let entry_pub = region.assign_advice(
+                    || "wg26-entry-pub",
+                    config.tree_sum,
+                    base,
+                    || entry_val,
+                )?;
+                config.s_swap_entry.enable(&mut region, base)?;
+
                 Ok(SpendCells {
                     root_cells,
                     n_cells,
                     rc_in,
                     rc_out,
                     zero_cell,
+                    e_cells,
+                    swap_flag: swap_cells.flag,
+                    swap_idx: idx_cell,
+                    swap_h: swap_cells.swap_h,
+                    swap_s0: swap_s0_cell,
+                    swap_s1: swap_s1_cell,
+                    entry_pub,
                 })
             },
         )?;
@@ -1954,6 +2362,14 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
                 }
             }
         }
+
+        // WG-26 swap tail [S4 12]: slots 15..20.
+        layouter.constrain_instance(cells.swap_flag.cell(), config.instance, 15)?;
+        layouter.constrain_instance(cells.swap_idx.cell(), config.instance, 16)?;
+        layouter.constrain_instance(cells.swap_h.cell(), config.instance, 17)?;
+        layouter.constrain_instance(cells.swap_s0.cell(), config.instance, 18)?;
+        layouter.constrain_instance(cells.swap_s1.cell(), config.instance, 19)?;
+        layouter.constrain_instance(cells.entry_pub.cell(), config.instance, 20)?;
         Ok(())
     }
 }
@@ -2022,6 +2438,14 @@ mod tests {
         let rc_out1 = value_commit(40, r_out1, &vg, &rg);
 
         let circuit = V4SpendCircuit::<DEPTH> {
+            swap_flag: 0,
+            swap_idx: 0,
+            swap_h: Fp::ZERO,
+            swap_s0: Fp::ZERO,
+            swap_s1: Fp::ZERO,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
+
             witness: Value::known(SpendWitness {
                 inputs: vec![SpendNoteInput {
                     d: notes[2].d,
@@ -2065,6 +2489,11 @@ mod tests {
             Fp::ZERO,
             Fp::ZERO,
         ];
+        // WG-26 [S4 12]: a plain spend publishes the zero swap tail
+        // (slots 15..20), so the fixture carries the full 21-slot
+        // normative instance vector.
+        let mut instances = instances;
+        instances.resize(SPEND_INSTANCE_SLOTS, Fp::ZERO);
         assert_eq!(instances.len(), SPEND_INSTANCE_SLOTS);
         let rcs = vec![rc_in0, rc_out0, rc_out1];
         (circuit, instances, notes[2].clone(), rcs)
@@ -2110,6 +2539,14 @@ mod tests {
         let out_vals = [total_in - 3 * 50, 50, 50, 50];
 
         let circuit = V4SpendCircuit::<DEPTH> {
+            swap_flag: 0,
+            swap_idx: 0,
+            swap_h: Fp::ZERO,
+            swap_s0: Fp::ZERO,
+            swap_s1: Fp::ZERO,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
+
             witness: Value::known(SpendWitness {
                 inputs: vec![
                     SpendNoteInput {
@@ -2162,6 +2599,8 @@ mod tests {
             instances.push(x);
             instances.push(y);
         }
+        // WG-26 [S4 12]: a plain spend publishes the zero swap tail.
+        instances.resize(SPEND_INSTANCE_SLOTS, Fp::ZERO);
         assert_eq!(instances.len(), SPEND_INSTANCE_SLOTS);
 
         let k = V4SpendCircuit::<DEPTH>::required_k();
@@ -2452,6 +2891,14 @@ mod real_tests {
         let r_out: Vec<Fq> = (0..MAX_OUT).map(|_| Fq::random(OsRng)).collect();
 
         let circuit = V4SpendCircuit::<DEPTH> {
+            swap_flag: 0,
+            swap_idx: 0,
+            swap_h: Fp::ZERO,
+            swap_s0: Fp::ZERO,
+            swap_s1: Fp::ZERO,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
+
             witness: Value::known(SpendWitness {
                 inputs: vec![
                     SpendNoteInput {
@@ -2500,6 +2947,8 @@ mod real_tests {
             instances.push(x);
             instances.push(y);
         }
+        // WG-26 [S4 12]: a plain spend publishes the zero swap tail.
+        instances.resize(SPEND_INSTANCE_SLOTS, Fp::ZERO);
         assert_eq!(instances.len(), SPEND_INSTANCE_SLOTS);
 
         let t0 = Instant::now();
@@ -2558,5 +3007,377 @@ mod real_tests {
             )
             .is_err()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WG-26 swap hashlock in-circuit [S4 12]
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod swap_wg26_tests {
+    use super::*;
+    use crate::merkle;
+    use crate::v4::{blind_gen, hashlock_swap, nullifier_v4, value_commit, value_gen};
+    use crate::v4_prover::spend_instances_with_swap;
+    use halo2_proofs::dev::MockProver;
+    use rand::rngs::OsRng;
+
+    const DEPTH: usize = 4;
+    const PREIMAGE: [u8; 32] = [
+        0x2a, 0xb3, 0x11, 0x7c, 0x0f, 0xe4, 0x5d, 0x92, 0x68, 0x01, 0xda, 0x4f, 0xc3, 0x76, 0x18,
+        0xa9, 0x5e, 0x20, 0xbb, 0x87, 0x6c, 0xf1, 0x03, 0x49, 0xd0, 0xaa, 0x5b, 0x16, 0xe7, 0x82,
+        0x39, 0x4c,
+    ];
+
+    #[derive(Clone)]
+    struct SwapNote {
+        d: Fp,
+        a: Fp,
+        b: Fp,
+        rho: Fp,
+        v: u64,
+    }
+
+    fn note_entry_of(n: &SwapNote) -> Fp {
+        leaf_entry_v2(n.d, n.a, n.b, n.v, n.rho)
+    }
+
+    fn swap_pub(flag: u8, idx: u8, h: Fp, s0: Fp, s1: Fp, entry: Fp) -> SwapPub {
+        SwapPub {
+            flag,
+            idx,
+            h,
+            s0,
+            s1,
+            entry,
+        }
+    }
+
+    /// Plain funding notes + the swap-variant entry of notes[2] (the locked
+    /// output note created with the counterparty key shares).
+    fn lock_fixture() -> (Vec<SwapNote>, Vec<Fp>, Fp, Fp, Fp, Fp) {
+        let notes: Vec<SwapNote> = (0..3)
+            .map(|i| SwapNote {
+                d: Fp::random(OsRng),
+                a: Fp::random(OsRng),
+                b: Fp::random(OsRng),
+                rho: Fp::random(OsRng),
+                v: 100 + i as u64,
+            })
+            .collect();
+        let (h, s0, s1) = hashlock_swap(&PREIMAGE);
+        let swap_entry = swap_leaf_entry_v2(
+            notes[2].d,
+            notes[2].a,
+            notes[2].b,
+            notes[2].v,
+            notes[2].rho,
+            h,
+        );
+        let plain_entries: Vec<Fp> = notes.iter().map(note_entry_of).collect();
+        (notes, plain_entries, swap_entry, h, s0, s1)
+    }
+
+    #[test]
+    fn wg26_lock_honest_green() {
+        let (notes, plain_entries, _swap_entry, h, _s0, _s1) = lock_fixture();
+        // The lock spends a PLAIN note; the locked output entry is appended
+        // to the tree by the chain AFTER this transaction.
+        let root = merkle::build_root(&plain_entries, DEPTH);
+        let path = merkle::auth_path(&plain_entries, 0, DEPTH);
+        let vg = value_gen();
+        let rg = blind_gen();
+        let r_in = Fq::random(OsRng);
+        let r_out: Vec<Fq> = (0..2).map(|_| Fq::random(OsRng)).collect();
+        let rc_in = vec![value_commit(notes[0].v, r_in, &vg, &rg)];
+        let rc_out: Vec<pallas::Point> = (0..2)
+            .zip(r_out.iter())
+            .map(|(j, r)| value_commit(30 + 10 * j as u64, *r, &vg, &rg))
+            .collect();
+        let circuit = V4SpendCircuit::<DEPTH> {
+            witness: Value::known(SpendWitness {
+                inputs: vec![SpendNoteInput {
+                    d: notes[0].d,
+                    a: notes[0].a,
+                    b: notes[0].b,
+                    rho: notes[0].rho,
+                    v: notes[0].v,
+                    path,
+                }],
+                outputs: vec![SpendNoteOutput { v: 30 }, SpendNoteOutput { v: 40 }],
+            }),
+            r_in: vec![r_in],
+            r_out,
+            n_in: 1,
+            n_out: 2,
+            corrupt_limb: None,
+            corrupt_leaf: None,
+            swap_flag: 1,
+            swap_idx: 1,
+            swap_h: h,
+            swap_s0: Fp::ZERO,
+            swap_s1: Fp::ZERO,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
+        };
+        let ns = vec![nullifier_v4(notes[0].a, notes[0].b, notes[0].rho)];
+        let instances = spend_instances_with_swap(
+            root,
+            &ns,
+            &rc_in,
+            &rc_out,
+            &swap_pub(1, 1, h, Fp::ZERO, Fp::ZERO, Fp::ZERO),
+        );
+        assert_eq!(instances.len(), SPEND_INSTANCE_SLOTS);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        prover.verify().unwrap();
+    }
+
+    fn claim_circuit_and_instances(
+        corrupt_preimage: bool,
+        corrupt_swap_flag: bool,
+        lane_override: Option<(Fp, Fp)>,
+        flag: u8,
+        h_override: Option<Fp>,
+    ) -> (V4SpendCircuit<DEPTH>, Vec<Fp>) {
+        let (notes, plain_entries, swap_entry, h, s0, s1) = lock_fixture();
+        let (lane0, lane1) = lane_override.unwrap_or((s0, s1));
+        let h_eff = h_override.unwrap_or(h);
+        // The claim tree contains the SWAP-variant entry of the locked note.
+        let mut entries: Vec<Fp> = vec![plain_entries[0], plain_entries[1]];
+        entries.push(swap_entry);
+        let root = merkle::build_root(&entries, DEPTH);
+        let path = merkle::auth_path(&entries, 2, DEPTH);
+        let vg = value_gen();
+        let rg = blind_gen();
+        let r_in = Fq::random(OsRng);
+        let rc_in = vec![value_commit(notes[2].v, r_in, &vg, &rg)];
+        let r_out = Fq::random(OsRng);
+        let rc_out = vec![value_commit(notes[2].v, r_out, &vg, &rg)];
+        let circuit = V4SpendCircuit::<DEPTH> {
+            witness: Value::known(SpendWitness {
+                inputs: vec![SpendNoteInput {
+                    d: notes[2].d,
+                    a: notes[2].a,
+                    b: notes[2].b,
+                    rho: notes[2].rho,
+                    v: notes[2].v,
+                    path,
+                }],
+                outputs: vec![SpendNoteOutput { v: notes[2].v }],
+            }),
+            r_in: vec![r_in],
+            r_out: vec![r_out],
+            n_in: 1,
+            n_out: 1,
+            corrupt_limb: None,
+            corrupt_leaf: None,
+            swap_flag: flag,
+            swap_idx: 1,
+            swap_h: h_eff,
+            swap_s0: lane0,
+            swap_s1: lane1,
+            corrupt_preimage,
+            corrupt_swap_flag,
+        };
+        let ns = vec![nullifier_v4(notes[2].a, notes[2].b, notes[2].rho)];
+        let instances = spend_instances_with_swap(
+            root,
+            &ns,
+            &rc_in,
+            &rc_out,
+            &swap_pub(flag, 1, h_eff, lane0, lane1, swap_entry),
+        );
+        (circuit, instances)
+    }
+
+    #[test]
+    fn wg26_claim_honest_green() {
+        let (circuit, instances) = claim_circuit_and_instances(false, false, None, 2, None);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        prover.verify().unwrap();
+    }
+
+    #[test]
+    fn wg26_refund_honest_green() {
+        // Refund: same derivation as claim, NO preimage (zero lanes).
+        let (circuit, instances) =
+            claim_circuit_and_instances(false, false, Some((Fp::ZERO, Fp::ZERO)), 3, None);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        prover.verify().unwrap();
+    }
+
+    #[test]
+    fn wg26_claim_wrong_preimage_rejected() {
+        let (circuit, instances) = claim_circuit_and_instances(
+            false,
+            false,
+            Some((Fp::from(12345u64), Fp::ZERO)),
+            2,
+            None,
+        );
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_claim_zero_lanes_rejected() {
+        let (circuit, instances) =
+            claim_circuit_and_instances(false, false, Some((Fp::ZERO, Fp::ZERO)), 2, None);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_claim_h_zero_rejected() {
+        let (circuit, instances) =
+            claim_circuit_and_instances(false, false, None, 2, Some(Fp::ZERO));
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_plain_spend_of_locked_note_rejected() {
+        let (notes, plain_entries, swap_entry, h, _s0, _s1) = lock_fixture();
+        // The tree holds ONLY the swap-variant entry of the locked note, so
+        // a plain (flag 0) spend of that note fails membership.
+        let mut entries: Vec<Fp> = vec![plain_entries[0], plain_entries[1]];
+        entries.push(swap_entry);
+        let root = merkle::build_root(&entries, DEPTH);
+        let path = merkle::auth_path(&entries, 2, DEPTH);
+        let vg = value_gen();
+        let rg = blind_gen();
+        let r_in = Fq::random(OsRng);
+        let rc_in = vec![value_commit(notes[2].v, r_in, &vg, &rg)];
+        let r_out = Fq::random(OsRng);
+        let rc_out = vec![value_commit(notes[2].v, r_out, &vg, &rg)];
+        let circuit = V4SpendCircuit::<DEPTH> {
+            witness: Value::known(SpendWitness {
+                inputs: vec![SpendNoteInput {
+                    d: notes[2].d,
+                    a: notes[2].a,
+                    b: notes[2].b,
+                    rho: notes[2].rho,
+                    v: notes[2].v,
+                    path,
+                }],
+                outputs: vec![SpendNoteOutput { v: notes[2].v }],
+            }),
+            r_in: vec![r_in],
+            r_out: vec![r_out],
+            n_in: 1,
+            n_out: 1,
+            corrupt_limb: None,
+            corrupt_leaf: None,
+            swap_flag: 0,
+            swap_idx: 0,
+            swap_h: Fp::ZERO,
+            swap_s0: Fp::ZERO,
+            swap_s1: Fp::ZERO,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
+        };
+        let ns = vec![nullifier_v4(notes[2].a, notes[2].b, notes[2].rho)];
+        let instances = spend_instances_with_swap(
+            root,
+            &ns,
+            &rc_in,
+            &rc_out,
+            &swap_pub(0, 0, Fp::ZERO, Fp::ZERO, Fp::ZERO, Fp::ZERO),
+        );
+        let _ = h;
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_lock_with_lanes_rejected() {
+        let (notes, plain_entries, _swap_entry, h, _s0, _s1) = lock_fixture();
+        let root = merkle::build_root(&plain_entries, DEPTH);
+        let path = merkle::auth_path(&plain_entries, 0, DEPTH);
+        let vg = value_gen();
+        let rg = blind_gen();
+        let r_in = Fq::random(OsRng);
+        let rc_in = vec![value_commit(notes[0].v, r_in, &vg, &rg)];
+        let r_out = Fq::random(OsRng);
+        let rc_out = vec![value_commit(notes[0].v, r_out, &vg, &rg)];
+        let circuit = V4SpendCircuit::<DEPTH> {
+            witness: Value::known(SpendWitness {
+                inputs: vec![SpendNoteInput {
+                    d: notes[0].d,
+                    a: notes[0].a,
+                    b: notes[0].b,
+                    rho: notes[0].rho,
+                    v: notes[0].v,
+                    path,
+                }],
+                outputs: vec![SpendNoteOutput { v: 30 }],
+            }),
+            r_in: vec![r_in],
+            r_out: vec![r_out],
+            n_in: 1,
+            n_out: 1,
+            corrupt_limb: None,
+            corrupt_leaf: None,
+            swap_flag: 1,
+            swap_idx: 1,
+            swap_h: h,
+            swap_s0: Fp::from(7u64),
+            swap_s1: Fp::ZERO,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
+        };
+        let ns = vec![nullifier_v4(notes[0].a, notes[0].b, notes[0].rho)];
+        let instances = spend_instances_with_swap(
+            root,
+            &ns,
+            &rc_in,
+            &rc_out,
+            &swap_pub(1, 1, h, Fp::from(7u64), Fp::ZERO, Fp::ZERO),
+        );
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_flag_out_of_range_rejected() {
+        let (circuit, instances) = claim_circuit_and_instances(false, false, None, 4, None);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_corrupt_preimage_hook_rejected() {
+        let (circuit, instances) = claim_circuit_and_instances(true, false, None, 2, None);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_corrupt_swap_flag_hook_rejected() {
+        let (circuit, instances) = claim_circuit_and_instances(false, true, None, 2, None);
+        let k = V4SpendCircuit::<DEPTH>::required_k();
+        let prover = MockProver::run(k, &circuit, vec![instances]).unwrap();
+        assert!(prover.verify().is_err());
+    }
+
+    #[test]
+    fn wg26_row_budget_k11_holds() {
+        // WG-26 [S4 12]: the swap tail must keep the FULL MAX topology at
+        // mainnet depth inside k = 11.
+        assert!(V4SpendCircuit::<32>::rows_needed() + 64 <= 1 << 11);
+        assert_eq!(V4SpendCircuit::<32>::required_k(), 11);
+        assert!(V4SpendCircuit::<DEPTH>::rows_needed() < 1 << 11);
     }
 }

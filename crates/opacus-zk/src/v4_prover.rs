@@ -76,8 +76,51 @@ pub fn spend_instances(
             }
         }
     }
+    // WG-26 [S4 12]: the 6-slot swap tail; plain transactions publish zeros.
+    v.resize(SPEND_INSTANCE_SLOTS, Fp::ZERO);
     assert_eq!(v.len(), SPEND_INSTANCE_SLOTS, "instance slot invariant");
     v
+}
+
+/// WG-26 [S4 12]: normative 21-slot instance vector with the swap tail
+/// published (lock, claim and refund transactions).
+pub fn spend_instances_with_swap(
+    root: Fp,
+    ns: &[Fp],
+    rc_in: &[pallas::Point],
+    rc_out: &[pallas::Point],
+    swap: &crate::spend::SwapPub,
+) -> Vec<Fp> {
+    let mut v = spend_instances(root, ns, rc_in, rc_out);
+    let n = v.len();
+    v[n - 6] = Fp::from(swap.flag as u64);
+    v[n - 5] = Fp::from(swap.idx as u64);
+    v[n - 4] = swap.h;
+    v[n - 3] = swap.s0;
+    v[n - 2] = swap.s1;
+    v[n - 1] = swap.entry;
+    v
+}
+
+/// WG-26 [S4 12]: unpack the swap tail (slots 15..20) of the normative
+/// instance vector into the circuit struct fields.
+fn swap_tail_of(instances: &[Fp]) -> (u8, u8, Fp, Fp, Fp) {
+    assert_eq!(
+        instances.len(),
+        SPEND_INSTANCE_SLOTS,
+        "instance slot invariant"
+    );
+    let small = |v: &Fp| -> u8 {
+        let r = ff::PrimeField::to_repr(v);
+        r.as_ref()[0]
+    };
+    (
+        small(&instances[15]),
+        small(&instances[16]),
+        instances[17],
+        instances[18],
+        instances[19],
+    )
 }
 
 /// Mock-prover self-check of a v4 spend against its normative instances.
@@ -99,12 +142,20 @@ pub fn mock_verify_v4<const DEPTH: usize>(
         SPEND_INSTANCE_SLOTS,
         "instance slot invariant"
     );
+    let (swap_flag, swap_idx, swap_h, swap_s0, swap_s1) = swap_tail_of(instances);
     let circuit: V4SpendCircuit<DEPTH> = V4SpendCircuit {
         witness: Value::known(witness.clone()),
         r_in: r_in.to_vec(),
         r_out: r_out.to_vec(),
         n_in,
         n_out,
+        swap_flag,
+        swap_idx,
+        swap_h,
+        swap_s0,
+        swap_s1,
+        corrupt_preimage: false,
+        corrupt_swap_flag: false,
         corrupt_limb: None,
         corrupt_leaf: None,
     };
@@ -251,6 +302,7 @@ mod real {
             SPEND_INSTANCE_SLOTS,
             "instance slot invariant"
         );
+        let (swap_flag, swap_idx, swap_h, swap_s0, swap_s1) = swap_tail_of(instances);
         assert!((1..=MAX_IN).contains(&n_in) && (1..=MAX_OUT).contains(&n_out));
         let circuit: V4SpendCircuit<DEPTH> = V4SpendCircuit {
             witness: Value::known(witness.clone()),
@@ -258,6 +310,13 @@ mod real {
             r_out: r_out.to_vec(),
             n_in,
             n_out,
+            swap_flag,
+            swap_idx,
+            swap_h,
+            swap_s0,
+            swap_s1,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
             corrupt_limb: None,
             corrupt_leaf: None,
         };
@@ -304,6 +363,7 @@ mod real {
             SPEND_INSTANCE_SLOTS,
             "instance slot invariant"
         );
+        let (swap_flag, swap_idx, swap_h, swap_s0, swap_s1) = swap_tail_of(instances);
         assert!((1..=MAX_IN).contains(&n_in) && (1..=MAX_OUT).contains(&n_out));
         let circuit: V4SpendCircuit<DEPTH> = V4SpendCircuit {
             witness: Value::unknown(),
@@ -311,6 +371,13 @@ mod real {
             r_out: vec![Fq::ZERO; n_out],
             n_in,
             n_out,
+            swap_flag,
+            swap_idx,
+            swap_h,
+            swap_s0,
+            swap_s1,
+            corrupt_preimage: false,
+            corrupt_swap_flag: false,
             corrupt_limb: None,
             corrupt_leaf: None,
         };
