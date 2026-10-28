@@ -200,17 +200,24 @@ pub fn leaf_entry_v2(d: Fp, a: Fp, b: Fp, v: u64, rho: Fp) -> Fp {
     tree_rep(&leaf_v2(d, a, b, v, rho))
 }
 
+/// WG-26 [S4 12]: swap-variant accumulator LEAF POINT of a note whose
+/// leaf absorbs the public hashlock H - the point form of the swap entry,
+/// for tx builders publishing the locked output:
+/// `h_swap = P(h_leaf, H, 0)`, `L' = P(D, a+b, a*b) + h_swap * G3`.
+pub fn swap_leaf_point_v2(d: Fp, a: Fp, b: Fp, v: u64, rho: Fp, h: Fp) -> pallas::Point {
+    let h_leaf = crate::v4::h_leaf_v2(v, rho);
+    let h_swap = poseidon_absorb(h_leaf, h, Fp::ZERO)[0];
+    let key = crate::v4::p_leaf(d, a + b, a * b);
+    key + crate::v4::leaf_gen() * crate::v4::fq_reduce_fp(h_swap)
+}
+
 /// WG-26 [S4 12]: swap-variant accumulator entry of a note whose leaf
 /// absorbs the public hashlock H:
 /// `h_swap = P(h_leaf, H, 0)`, `L' = P(D, a+b, a*b) + h_swap * G3`,
 /// `entry' = tree_rep(L')`. The lock publishes this entry in the tree; a
 /// plain spend of the note then fails membership by construction.
 pub fn swap_leaf_entry_v2(d: Fp, a: Fp, b: Fp, v: u64, rho: Fp, h: Fp) -> Fp {
-    let h_leaf = crate::v4::h_leaf_v2(v, rho);
-    let h_swap = poseidon_absorb(h_leaf, h, Fp::ZERO)[0];
-    let key = crate::v4::p_leaf(d, a + b, a * b);
-    let l = key + crate::v4::leaf_gen() * crate::v4::fq_reduce_fp(h_swap);
-    tree_rep(&l)
+    tree_rep(&swap_leaf_point_v2(d, a, b, v, rho, h))
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +256,54 @@ pub fn sighash_v4(
         h.update(rc.to_affine().to_bytes().as_ref());
     }
     h.update(&fee.to_le_bytes());
+    let d = h.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(d.as_bytes());
+    out
+}
+
+/// WG-26 v5 transaction sighash [S4 12 3.6]: the v5 stream covers every
+/// serialized field consumed by verification INCLUDING the swap tail:
+/// `S = blake3("GHOST/v5/sighash", le64(version = 5), acc_root, N_1..N_n,
+/// L_1..L_m, RC_in_1..RC_in_n, RC_out_1..RC_out_m, le64(fee),
+/// le64(flag), le64(idx), H, s0, s1, entry)`.
+///
+/// flag/idx enter as le64 (the small-integer convention of version/fee);
+/// the four field elements enter as canonical little-endian reprs, like
+/// the nullifiers [S4 7, S4 11]. Plain v5 transactions cover the all-zero
+/// tail, so ONE sighash shape serves every swap mode.
+pub fn sighash_v5(
+    root: &pallas::Point,
+    ns: &[Fp],
+    leaves: &[pallas::Point],
+    rc_in: &[pallas::Point],
+    rc_out: &[pallas::Point],
+    fee: u64,
+    swap: &SwapPub,
+) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(b"GHOST/v5/sighash");
+    h.update(&5u64.to_le_bytes());
+    h.update(root.to_affine().to_bytes().as_ref());
+    for n in ns {
+        h.update(n.to_repr().as_ref());
+    }
+    for l in leaves {
+        h.update(l.to_affine().to_bytes().as_ref());
+    }
+    for rc in rc_in {
+        h.update(rc.to_affine().to_bytes().as_ref());
+    }
+    for rc in rc_out {
+        h.update(rc.to_affine().to_bytes().as_ref());
+    }
+    h.update(&fee.to_le_bytes());
+    h.update(&u64::from(swap.flag).to_le_bytes());
+    h.update(&u64::from(swap.idx).to_le_bytes());
+    h.update(swap.h.to_repr().as_ref());
+    h.update(swap.s0.to_repr().as_ref());
+    h.update(swap.s1.to_repr().as_ref());
+    h.update(swap.entry.to_repr().as_ref());
     let d = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(d.as_bytes());

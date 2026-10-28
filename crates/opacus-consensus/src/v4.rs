@@ -405,6 +405,7 @@ mod tests {
             inputs: vec![(in_note.clone(), 0)],
             outputs: vec![out1, out2],
             fee: 5,
+            swap: None,
         };
         let tx = build_zk_spend_v4::<DEPTH>(&tree, &plan).expect("fixture spend builds");
         (tree, tx)

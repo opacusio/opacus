@@ -28,12 +28,14 @@
 
 use opacus_zk::prelude::*;
 use opacus_zk::spend::{
-    balance_holds, binding_sk, binding_vk, leaf_entry_v2, sighash_v4, sign_bind, tree_rep,
-    verify_bind, SpendNoteInput, SpendNoteOutput, SpendWitness, MAX_IN, MAX_OUT,
+    balance_holds, binding_sk, binding_vk, leaf_entry_v2, sighash_v4, sighash_v5, sign_bind,
+    swap_leaf_entry_v2, swap_leaf_point_v2, tree_rep, verify_bind, SpendNoteInput, SpendNoteOutput,
+    SpendWitness, SwapPub, MAX_IN, MAX_OUT,
 };
-use opacus_zk::v4::{blind_gen, leaf_v2, nullifier_v4, value_commit, value_gen};
+use opacus_zk::v4::{blind_gen, hashlock_swap, leaf_v2, nullifier_v4, value_commit, value_gen};
 use opacus_zk::v4_prover::{
-    acc_root_point, pallas, prove_v4, spend_instances, verify_v4, Curve, Fq, Group, GroupEncoding,
+    acc_root_point, pallas, prove_v4, spend_instances, spend_instances_with_swap, verify_v4, Curve,
+    Fq, Group, GroupEncoding,
 };
 use std::collections::HashSet;
 
@@ -52,6 +54,15 @@ pub const FEE_FLOOR_TESTNET: u64 = 0;
 
 /// Wire version of this format [S4 7].
 pub const TX_VERSION_V4: u32 = 4;
+
+/// Wire version of the WG-26 swap format [S4 12 3.6]: the v4 field set
+/// under version 5 plus the fixed-size swap tail. A zero tail is a plain
+/// v5 transaction.
+pub const TX_VERSION_V5: u32 = 5;
+
+/// Wire size of the swap tail: flag u8 + idx u8 + four canonical field
+/// encodings (h, s0, s1, entry).
+pub const SWAP_TAIL_BYTES: usize = 2 + 4 * 32;
 
 // ---------------------------------------------------------------------------
 // WalletNoteV4 [S4 3, S4 10]
@@ -127,7 +138,7 @@ impl WalletNoteV4 {
 pub enum TxV4Error {
     /// Topology/structure violation (counts, enc_note caps).
     Topology(String),
-    /// Wire version is not 4.
+    /// Wire version is not 4 (v4 path) or not 5 (WG-26 v5 path).
     Version(u32),
     /// A field encoding is not canonical [S4 11].
     Canonical,
@@ -331,65 +342,74 @@ impl TxV4 {
         if version != TX_VERSION_V4 {
             return Err(TxV4Error::Version(version));
         }
-        let n_in = c.take_u8()? as usize;
-        let n_out = c.take_u8()? as usize;
-        if n_in == 0 || n_in > MAX_IN {
-            return Err(TxV4Error::Topology(format!(
-                "n_in {n_in} not in 1..={MAX_IN}"
-            )));
-        }
-        if n_out == 0 || n_out > MAX_OUT {
-            return Err(TxV4Error::Topology(format!(
-                "n_out {n_out} not in 1..={MAX_OUT}"
-            )));
-        }
-        let root = fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?;
-        let mut nullifiers = Vec::with_capacity(n_in);
-        for _ in 0..n_in {
-            nullifiers.push(fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?);
-        }
-        let mut leaves = Vec::with_capacity(n_out);
-        for _ in 0..n_out {
-            leaves.push(take_point(&mut c)?);
-        }
-        let mut rc_in = Vec::with_capacity(n_in);
-        for _ in 0..n_in {
-            rc_in.push(take_point(&mut c)?);
-        }
-        let mut rc_out = Vec::with_capacity(n_out);
-        for _ in 0..n_out {
-            rc_out.push(take_point(&mut c)?);
-        }
-        let mut enc_notes = Vec::with_capacity(n_out);
-        for _ in 0..n_out {
-            let len = c.take_u32_le()? as usize;
-            if len > ENC_NOTE_MAX {
-                return Err(TxV4Error::Topology(format!(
-                    "enc_note len {len} > ENC_NOTE_MAX {ENC_NOTE_MAX}"
-                )));
-            }
-            enc_notes.push(c.take(len)?.to_vec());
-        }
-        let fee = c.take_u64_le()?;
-        let plen = c.take_u32_le()? as usize;
-        let proof = c.take(plen)?.to_vec();
-        let mut bind_sig = [0u8; 64];
-        bind_sig.copy_from_slice(c.take(64)?);
+        let tx = parse_tx_body(&mut c)?;
         if c.off != c.b.len() {
             return Err(TxV4Error::TrailingBytes);
         }
-        Ok(TxV4 {
-            root,
-            nullifiers,
-            leaves,
-            rc_in,
-            rc_out,
-            enc_notes,
-            fee,
-            proof,
-            bind_sig,
-        })
+        Ok(tx)
     }
+}
+
+/// Parse the v4 field body after the wire version has been consumed and
+/// checked by the caller - the ONE normative body parser, shared by the
+/// v4 and WG-26 v5 strict parsers [S4 12 3.6]. Trailing-byte policy
+/// belongs to the caller (v4: nothing may remain; v5: the swap tail).
+fn parse_tx_body(c: &mut Cursor) -> Result<TxV4, TxV4Error> {
+    let n_in = c.take_u8()? as usize;
+    let n_out = c.take_u8()? as usize;
+    if n_in == 0 || n_in > MAX_IN {
+        return Err(TxV4Error::Topology(format!(
+            "n_in {n_in} not in 1..={MAX_IN}"
+        )));
+    }
+    if n_out == 0 || n_out > MAX_OUT {
+        return Err(TxV4Error::Topology(format!(
+            "n_out {n_out} not in 1..={MAX_OUT}"
+        )));
+    }
+    let root = fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?;
+    let mut nullifiers = Vec::with_capacity(n_in);
+    for _ in 0..n_in {
+        nullifiers.push(fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?);
+    }
+    let mut leaves = Vec::with_capacity(n_out);
+    for _ in 0..n_out {
+        leaves.push(take_point(&mut *c)?);
+    }
+    let mut rc_in = Vec::with_capacity(n_in);
+    for _ in 0..n_in {
+        rc_in.push(take_point(&mut *c)?);
+    }
+    let mut rc_out = Vec::with_capacity(n_out);
+    for _ in 0..n_out {
+        rc_out.push(take_point(&mut *c)?);
+    }
+    let mut enc_notes = Vec::with_capacity(n_out);
+    for _ in 0..n_out {
+        let len = c.take_u32_le()? as usize;
+        if len > ENC_NOTE_MAX {
+            return Err(TxV4Error::Topology(format!(
+                "enc_note len {len} > ENC_NOTE_MAX {ENC_NOTE_MAX}"
+            )));
+        }
+        enc_notes.push(c.take(len)?.to_vec());
+    }
+    let fee = c.take_u64_le()?;
+    let plen = c.take_u32_le()? as usize;
+    let proof = c.take(plen)?.to_vec();
+    let mut bind_sig = [0u8; 64];
+    bind_sig.copy_from_slice(c.take(64)?);
+    Ok(TxV4 {
+        root,
+        nullifiers,
+        leaves,
+        rc_in,
+        rc_out,
+        enc_notes,
+        fee,
+        proof,
+        bind_sig,
+    })
 }
 
 fn take_point(c: &mut Cursor) -> Result<pallas::Point, TxV4Error> {
@@ -440,8 +460,192 @@ impl<'a> Cursor<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// TxV5: the WG-26 swap wire [S4 12 3.6]
+// ---------------------------------------------------------------------------
+
+/// A v5 shielded transaction: the v4 field set plus the normative swap
+/// tail (flag, idx, H, s0, s1, spent_swap_entry) [S4 12 3.6].
+///
+/// Wire form: the v4 body under version 5, then the fixed-size tail
+/// ([`SWAP_TAIL_BYTES`]). A zero tail is a plain transaction; the tail is
+/// covered by the v5 sighash and rides the normative instance slots
+/// 15..20 through [`spend_instances_with_swap`].
+#[derive(Clone, Debug)]
+pub struct TxV5 {
+    /// The v4 base fields (root, nullifiers, leaves, RCs, enc_notes, fee,
+    /// proof, bind_sig).
+    pub base: TxV4,
+    /// Public swap material; the zero tail for a plain v5 transaction.
+    pub swap: SwapPub,
+}
+
+impl TxV5 {
+    /// The zero swap tail (plain v5 transaction).
+    pub fn swap_none() -> SwapPub {
+        SwapPub {
+            flag: 0,
+            idx: 0,
+            h: Fp::ZERO,
+            s0: Fp::ZERO,
+            s1: Fp::ZERO,
+            entry: Fp::ZERO,
+        }
+    }
+
+    /// Structural check [S4 9 step 1, S4 12 3.6]: the base topology must
+    /// be well-formed and the tail must match its mode exactly.
+    pub fn check_swap_tail(&self) -> Result<(), TxV4Error> {
+        self.base.check_topology()?;
+        let s = &self.swap;
+        let nz = |f: &Fp| *f != Fp::ZERO;
+        match s.flag {
+            0 => {
+                // Plain: the whole tail is zero.
+                if s.idx != 0 || nz(&s.h) || nz(&s.s0) || nz(&s.s1) || nz(&s.entry) {
+                    return Err(TxV4Error::Topology("plain v5 tail must be all-zero".into()));
+                }
+            }
+            1 => {
+                // Lock: a real output index, a real hashlock, empty lanes,
+                // no spent-swap entry.
+                if s.idx == 0 || s.idx as usize > self.base.leaves.len() {
+                    return Err(TxV4Error::Topology(format!(
+                        "lock idx {} not in 1..={}",
+                        s.idx,
+                        self.base.leaves.len()
+                    )));
+                }
+                if !nz(&s.h) || nz(&s.s0) || nz(&s.s1) || nz(&s.entry) {
+                    return Err(TxV4Error::Topology("lock tail must carry only H".into()));
+                }
+            }
+            2 | 3 => {
+                // Claim/refund: a real input index, a real hashlock and the
+                // spent swap entry; only the claim carries preimage lanes.
+                if s.idx == 0 || s.idx as usize > self.base.nullifiers.len() {
+                    return Err(TxV4Error::Topology(format!(
+                        "claim/refund idx {} not in 1..={}",
+                        s.idx,
+                        self.base.nullifiers.len()
+                    )));
+                }
+                if !nz(&s.h) || !nz(&s.entry) {
+                    return Err(TxV4Error::Topology(
+                        "claim/refund must carry H and the swap entry".into(),
+                    ));
+                }
+                if s.flag == 3 && (nz(&s.s0) || nz(&s.s1)) {
+                    return Err(TxV4Error::Topology(
+                        "refund must not carry preimage lanes".into(),
+                    ));
+                }
+            }
+            other => {
+                return Err(TxV4Error::Topology(format!("unknown swap flag {other}")));
+            }
+        }
+        Ok(())
+    }
+
+    /// The normative public instance vector [S4 8, S4 12]: the 21-slot
+    /// layout with the swap tail published.
+    pub fn instances_of(&self) -> Vec<Fp> {
+        spend_instances_with_swap(
+            self.base.root,
+            &self.base.nullifiers,
+            &self.base.rc_in,
+            &self.base.rc_out,
+            &self.swap,
+        )
+    }
+
+    /// Sighash [S4 7, S4 12 3.6]: the v5 stream covers every serialized
+    /// field consumed by verification INCLUDING the swap tail; version
+    /// enters as the constant le64(5). enc_notes stay opaque and
+    /// deliberately uncovered, as in v4.
+    pub fn sighash(&self) -> [u8; 32] {
+        sighash_v5(
+            &acc_root_point(self.base.root),
+            &self.base.nullifiers,
+            &self.base.leaves,
+            &self.base.rc_in,
+            &self.base.rc_out,
+            self.base.fee,
+            &self.swap,
+        )
+    }
+
+    /// Canonical wire form [S4 12 3.6]: the v4 body under version 5,
+    /// followed by the fixed-size swap tail (flag u8, idx u8, then h, s0,
+    /// s1, entry as canonical 32-byte field encodings).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut b = self.base.to_bytes();
+        b[0..4].copy_from_slice(&TX_VERSION_V5.to_le_bytes());
+        b.push(self.swap.flag);
+        b.push(self.swap.idx);
+        b.extend_from_slice(fp_to_bytes(self.swap.h).as_slice());
+        b.extend_from_slice(fp_to_bytes(self.swap.s0).as_slice());
+        b.extend_from_slice(fp_to_bytes(self.swap.s1).as_slice());
+        b.extend_from_slice(fp_to_bytes(self.swap.entry).as_slice());
+        b
+    }
+
+    /// Strict parser [S4 11, S4 12 3.6]: version 5, the v4 body rules,
+    /// exactly `SWAP_TAIL_BYTES` tail bytes with canonical field
+    /// encodings, the canonical tail rules, and NO trailing bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<TxV5, TxV4Error> {
+        let mut c = Cursor { b: bytes, off: 0 };
+        let version = c.take_u32_le()?;
+        if version != TX_VERSION_V5 {
+            return Err(TxV4Error::Version(version));
+        }
+        let base = parse_tx_body(&mut c)?;
+        let flag = c.take_u8()?;
+        let idx = c.take_u8()?;
+        let h = fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?;
+        let s0 = fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?;
+        let s1 = fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?;
+        let entry = fp_from_bytes(&c.take_32()?).ok_or(TxV4Error::Canonical)?;
+        if c.off != c.b.len() {
+            return Err(TxV4Error::TrailingBytes);
+        }
+        let tx = TxV5 {
+            base,
+            swap: SwapPub {
+                flag,
+                idx,
+                h,
+                s0,
+                s1,
+                entry,
+            },
+        };
+        tx.check_swap_tail()?;
+        Ok(tx)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Build pipeline [S4 10]
 // ---------------------------------------------------------------------------
+
+/// WG-26 [S4 12 3.7]: a swap instruction inside a spend plan. The builder
+/// derives the published [`SwapPub`] tail from the intent:
+/// - `Lock` publishes `h` and creates output `idx` (1-based) with the
+///   swap-variant leaf absorbing `h` [S4 12 3.1];
+/// - `Claim` derives `(H, s0, s1)` from the preimage and spends input
+///   `idx` (1-based) through its swap-variant leaf, publishing its entry;
+/// - `Refund` spends input `idx` back under the lock's `h` with empty
+///   lanes (no preimage).
+#[derive(Clone, Debug)]
+pub enum SwapIntent {
+    /// Lock output `idx` (1-based) under the hashlock `h`.
+    Lock { idx: u8, h: Fp },
+    /// Claim input `idx` (1-based) by revealing the 32-byte preimage.
+    Claim { idx: u8, preimage: [u8; 32] },
+    /// Refund input `idx` (1-based) under the lock's hashlock `h`.
+    Refund { idx: u8, h: Fp },
+}
 
 /// The spend plan handed to [`build_zk_spend_v4`]: which notes to spend
 /// (with their leaf indices in the anchor tree), which notes to create,
@@ -452,6 +656,8 @@ pub struct SpendPlanV4 {
     pub inputs: Vec<(WalletNoteV4, usize)>,
     pub outputs: Vec<WalletNoteV4>,
     pub fee: u64,
+    /// WG-26 [S4 12 3.7]: optional swap instruction; `None` is plain.
+    pub swap: Option<SwapIntent>,
 }
 
 /// Build the v4 spend [S4 10]: note selection checks, exact conservation
@@ -579,6 +785,239 @@ pub fn build_zk_spend_v4<const DEPTH: usize>(
 }
 
 // ---------------------------------------------------------------------------
+// WG-26 build pipeline [S4 12 3.6, 3.7]
+// ---------------------------------------------------------------------------
+
+/// Build the v5 spend [S4 10, S4 12]: the v4 build pipeline with the swap
+/// tail wired end to end.
+///
+/// - `plan.swap = None` builds a plain v5 transaction (zero tail).
+/// - `Lock { idx, h }` publishes output `idx` with its swap-variant leaf
+///   absorbing `h` [S4 12 3.1]; the other outputs stay plain.
+/// - `Claim { idx, preimage }` spends input `idx` through its
+///   swap-variant leaf: the tree anchor at the plan's leaf index must be
+///   the swap-variant entry, the published entry slot carries it, and
+///   `(H, s0, s1)` derive from the preimage.
+/// - `Refund { idx, h }` spends input `idx` back under the lock's `h`
+///   with empty lanes.
+///
+/// Conservation, RCs, proving, self-verification and the binding
+/// signature are the v4 pipeline unchanged; the instances and the
+/// sighash are the v5 (21-slot, tail-covered) forms.
+pub fn build_zk_spend_v5<const DEPTH: usize>(
+    tree: &TreeState,
+    plan: &SpendPlanV4,
+) -> Result<TxV5, TxV4Error> {
+    let n_in = plan.inputs.len();
+    let n_out = plan.outputs.len();
+    if n_in == 0 || n_in > MAX_IN || n_out == 0 || n_out > MAX_OUT {
+        return Err(TxV4Error::Topology(format!(
+            "inputs {n_in} in 1..={MAX_IN}, outputs {n_out} in 1..={MAX_OUT}"
+        )));
+    }
+
+    // Resolve the swap intent into the published tail [S4 12] with
+    // mode-specific index bounds; a claim derives (H, s0, s1) from the
+    // preimage, a lock/refund carries H directly.
+    let mut swap = match &plan.swap {
+        None => TxV5::swap_none(),
+        Some(SwapIntent::Lock { idx, h }) => {
+            if *idx == 0 || *idx as usize > n_out {
+                return Err(TxV4Error::Topology(format!(
+                    "lock idx {idx} not in 1..={n_out}"
+                )));
+            }
+            if *h == Fp::ZERO {
+                return Err(TxV4Error::Topology("lock hashlock must be nonzero".into()));
+            }
+            SwapPub {
+                flag: 1,
+                idx: *idx,
+                h: *h,
+                s0: Fp::ZERO,
+                s1: Fp::ZERO,
+                entry: Fp::ZERO,
+            }
+        }
+        Some(SwapIntent::Claim { idx, preimage }) => {
+            if *idx == 0 || *idx as usize > n_in {
+                return Err(TxV4Error::Topology(format!(
+                    "claim idx {idx} not in 1..={n_in}"
+                )));
+            }
+            let (h, s0, s1) = hashlock_swap(preimage);
+            SwapPub {
+                flag: 2,
+                idx: *idx,
+                h,
+                s0,
+                s1,
+                entry: Fp::ZERO,
+            }
+        }
+        Some(SwapIntent::Refund { idx, h }) => {
+            if *idx == 0 || *idx as usize > n_in {
+                return Err(TxV4Error::Topology(format!(
+                    "refund idx {idx} not in 1..={n_in}"
+                )));
+            }
+            if *h == Fp::ZERO {
+                return Err(TxV4Error::Topology(
+                    "refund hashlock must be nonzero".into(),
+                ));
+            }
+            SwapPub {
+                flag: 3,
+                idx: *idx,
+                h: *h,
+                s0: Fp::ZERO,
+                s1: Fp::ZERO,
+                entry: Fp::ZERO,
+            }
+        }
+    };
+    let swap_in = matches!(swap.flag, 2 | 3).then_some(swap.idx as usize);
+    let lock_out = (swap.flag == 1).then_some(swap.idx as usize);
+
+    // Decode inputs and prove membership against the anchor tree. A
+    // claim/refund input anchors at its SWAP-VARIANT entry [S4 12 3.1]:
+    // the tree holds the locked entry, so the plain-entry check would
+    // reject the very note the lock published.
+    let mut notes_in: Vec<(Fp, Fp, Fp, Fp, u64, Vec<Fp>)> = Vec::with_capacity(n_in);
+    let mut swap_entry = Fp::ZERO;
+    for (i, (note, idx)) in plan.inputs.iter().enumerate() {
+        let (d, a, b, rho) = note.parts().ok_or(TxV4Error::CorruptNote)?;
+        let want = if swap_in == Some(i + 1) {
+            let e = swap_leaf_entry_v2(d, a, b, note.value, rho, swap.h);
+            swap_entry = e;
+            e
+        } else {
+            note.tree_entry().ok_or(TxV4Error::CorruptNote)?
+        };
+        match tree.leaf(*idx) {
+            Some(l) if l == want => {}
+            _ => return Err(TxV4Error::UnknownLeaf),
+        }
+        let path = tree.auth_path(*idx).ok_or(TxV4Error::UnknownLeaf)?;
+        notes_in.push((d, a, b, rho, note.value, path));
+    }
+    if matches!(swap.flag, 2 | 3) {
+        swap.entry = swap_entry;
+    }
+
+    // EXACT conservation before any proving work [S4 10], unchanged.
+    let sum_in: u64 = notes_in.iter().map(|n| n.4).sum();
+    let sum_out: u64 = plan.outputs.iter().map(|n| n.value).sum();
+    let fee = plan.fee;
+    let needed = sum_out.checked_add(fee).ok_or(TxV4Error::Overflow)?;
+    if sum_in != needed {
+        return Err(TxV4Error::Unbalanced {
+            inputs: sum_in,
+            outputs_plus_fee: needed,
+        });
+    }
+
+    // Validate outputs up front so later expects are total.
+    for n in &plan.outputs {
+        n.parts().ok_or(TxV4Error::CorruptNote)?;
+    }
+
+    // Blinding scalars and host-side RCs [S4 4], unchanged.
+    let r_in: Vec<Fq> = (0..n_in).map(|_| Fq::random(OsRng)).collect();
+    let r_out: Vec<Fq> = (0..n_out).map(|_| Fq::random(OsRng)).collect();
+    let vg = value_gen();
+    let rg = blind_gen();
+    let rc_in: Vec<pallas::Point> = (0..n_in)
+        .map(|i| value_commit(notes_in[i].4, r_in[i], &vg, &rg))
+        .collect();
+    let rc_out: Vec<pallas::Point> = (0..n_out)
+        .map(|j| value_commit(plan.outputs[j].value, r_out[j], &vg, &rg))
+        .collect();
+
+    let ns: Vec<Fp> = notes_in
+        .iter()
+        .map(|n| nullifier_v4(n.1, n.2, n.3))
+        .collect();
+    // Published leaves [S4 3, S4 12 3.1]: the locked output is published
+    // with its swap-variant leaf absorbing H; every other output stays
+    // plain.
+    let leaves: Vec<pallas::Point> = plan
+        .outputs
+        .iter()
+        .enumerate()
+        .map(|(j, n)| {
+            if lock_out == Some(j + 1) {
+                let (d, a, b, rho) = n.parts().expect("validated above");
+                swap_leaf_point_v2(d, a, b, n.value, rho, swap.h)
+            } else {
+                n.leaf_point().expect("validated above")
+            }
+        })
+        .collect();
+    let root = tree.root();
+
+    // Normative 21-slot instances [S4 8, S4 12] through the shared helper.
+    let instances = spend_instances_with_swap(root, &ns, &rc_in, &rc_out, &swap);
+
+    // Witness [S4 8] and prove (the swap tail rides the instances).
+    let witness = SpendWitness {
+        inputs: notes_in
+            .iter()
+            .map(|n| SpendNoteInput {
+                d: n.0,
+                a: n.1,
+                b: n.2,
+                rho: n.3,
+                v: n.4,
+                path: n.5.clone(),
+            })
+            .collect(),
+        outputs: plan
+            .outputs
+            .iter()
+            .map(|n| SpendNoteOutput { v: n.value })
+            .collect(),
+    };
+    let proof = prove_v4::<DEPTH>(&witness, &r_in, &r_out, n_in, n_out, &instances)
+        .map_err(|e| TxV4Error::Proof(format!("prove: {e}")))?;
+
+    // Self-verify BEFORE any wallet state mutation [S4 10].
+    verify_v4::<DEPTH>(&proof.proof, &instances, n_in, n_out)
+        .map_err(|e| TxV4Error::Proof(format!("self-verify: {e}")))?;
+
+    // Sighash and the binding signature [S4 6, S4 12 3.6]: the v5 stream
+    // covers the tail.
+    let s = sighash_v5(
+        &acc_root_point(root),
+        &ns,
+        &leaves,
+        &rc_in,
+        &rc_out,
+        fee,
+        &swap,
+    );
+    let bsk = binding_sk(&r_in, &r_out);
+    let bvk = binding_vk(&rc_in, &rc_out, fee);
+    debug_assert!(balance_holds(&rc_in, &rc_out, fee, bsk));
+    let bind_sig = sign_bind(&s, bsk, &bvk);
+
+    Ok(TxV5 {
+        base: TxV4 {
+            root,
+            nullifiers: ns,
+            leaves,
+            rc_in,
+            rc_out,
+            enc_notes: vec![Vec::new(); n_out],
+            fee,
+            proof: proof.proof,
+            bind_sig,
+        },
+        swap,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Confirm pipeline [S4 9]
 // ---------------------------------------------------------------------------
 
@@ -639,6 +1078,66 @@ pub fn confirm_zk_tx<const DEPTH: usize>(
 
     // All checks passed: commit leaf insertion + seen-set [S4 9 step 6].
     for l in &tx.leaves {
+        tree.append(tree_rep(l));
+    }
+    for k in keys {
+        seen.insert(k);
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// WG-26 confirm pipeline [S4 9, S4 12 3.6]
+// ---------------------------------------------------------------------------
+
+/// Confirm a v5 transaction exactly as consensus would [S4 9, S4 12]: the
+/// v4 validation order with the swap-tail-aware instances and the
+/// tail-covered sighash. NO state mutation until every check has passed.
+pub fn confirm_zk_tx_v5<const DEPTH: usize>(
+    tx: &TxV5,
+    tree: &mut TreeState,
+    seen: &mut HashSet<[u8; 32]>,
+    fee_floor: u64,
+) -> Result<(), TxV4Error> {
+    // [S4 9 step 1] structure/topology + canonical swap tail.
+    tx.check_swap_tail()?;
+
+    // step 2: halo2 verify against the 21-slot instances reconstructed
+    // from the serialized tx fields (tail included) [S4 8, S4 12].
+    let n_in = tx.base.nullifiers.len();
+    let n_out = tx.base.leaves.len();
+    let instances = tx.instances_of();
+    verify_v4::<DEPTH>(&tx.base.proof, &instances, n_in, n_out)
+        .map_err(|e| TxV4Error::Proof(format!("verify: {e}")))?;
+
+    // steps 3+4: balance and bind_sig jointly under the recomputed bvk
+    // [S4 6]; the sighash is the v5 stream (tail covered).
+    let s = tx.sighash();
+    let bvk = binding_vk(&tx.base.rc_in, &tx.base.rc_out, tx.base.fee);
+    if !verify_bind(&s, &bvk, &tx.base.bind_sig) {
+        return Err(TxV4Error::Balance);
+    }
+
+    // step 5: nullifier seen-set (defense in depth [S4 5, S4 9]).
+    let keys: Vec<[u8; 32]> = tx.base.nullifiers.iter().map(|n| fp_to_bytes(*n)).collect();
+    for k in &keys {
+        if seen.contains(k) {
+            return Err(TxV4Error::NullifierSeen);
+        }
+    }
+
+    // step 6: anchor at the CURRENT frontier root [S4 9 step 6].
+    if tree.root() != tx.base.root {
+        return Err(TxV4Error::RootMismatch);
+    }
+
+    // step 7: fee floor [S4 9 step 7].
+    if tx.base.fee < fee_floor {
+        return Err(TxV4Error::Fee);
+    }
+
+    // All checks passed: commit leaf insertion + seen-set [S4 9 step 6].
+    for l in &tx.base.leaves {
         tree.append(tree_rep(l));
     }
     for k in keys {
@@ -841,6 +1340,7 @@ mod tests {
             inputs: vec![(notes[0].clone(), idxs[0])],
             outputs: vec![WalletNoteV4::random(900), WalletNoteV4::random(150)],
             fee: 100,
+            swap: None,
         };
         assert!(matches!(
             build_zk_spend_v4::<4>(&tree, &plan),
@@ -851,6 +1351,7 @@ mod tests {
             inputs: vec![(notes[0].clone(), idxs[0])],
             outputs: vec![WalletNoteV4::random(800), WalletNoteV4::random(100)],
             fee: 50,
+            swap: None,
         };
         assert!(matches!(
             build_zk_spend_v4::<4>(&tree, &plan),
@@ -861,6 +1362,7 @@ mod tests {
             inputs: vec![(notes[1].clone(), 99)],
             outputs: vec![WalletNoteV4::random(900), WalletNoteV4::random(100)],
             fee: 0,
+            swap: None,
         };
         assert!(matches!(
             build_zk_spend_v4::<4>(&tree, &plan),
@@ -880,6 +1382,7 @@ mod tests {
             inputs: vec![(notes[2].clone(), idxs[2])],
             outputs: vec![change.clone(), recipient.clone()],
             fee: 50,
+            swap: None,
         };
         let tx = build_zk_spend_v4::<DEPTH>(&tree, &plan).expect("prove at depth 8");
         // Change correctness [S4 14]: the first published leaf is exactly
@@ -952,6 +1455,7 @@ mod tests {
             inputs: vec![(notes[1].clone(), idxs[1])],
             outputs: vec![change.clone(), recipient.clone()],
             fee: 50,
+            swap: None,
         };
         let tx = build_zk_spend_v4::<DEPTH>(&tree, &plan).expect("prove at mainnet depth");
         let mut seen = HashSet::new();
@@ -963,5 +1467,280 @@ mod tests {
         // The frontier absorbed both output leaves canonically [S4 9 step 6].
         assert_eq!(tree.leaf(tree.len() - 2), Some(tree_rep(&tx.leaves[0])));
         assert_eq!(tree.leaf(tree.len() - 1), Some(tree_rep(&tx.leaves[1])));
+    }
+
+    // -------------------------------------------------------------------
+    // WG-26 WP-3 [S4 12 3.6/3.7]: T5 v5 wire, T6 lock-then-claim
+    // -------------------------------------------------------------------
+
+    /// A hand-assembled, well-formed PLAIN v5 tx (no proving).
+    fn hand_v5() -> TxV5 {
+        TxV5 {
+            base: hand_tx(),
+            swap: TxV5::swap_none(),
+        }
+    }
+
+    #[test]
+    fn tx_v5_plain_wire_roundtrip_strict() {
+        let tx = hand_v5();
+        let parsed = TxV5::from_bytes(&tx.to_bytes()).expect("parse own v5 wire");
+        assert_eq!(parsed.base.root, tx.base.root);
+        assert_eq!(parsed.base.fee, tx.base.fee);
+        assert_eq!(parsed.swap.flag, 0);
+        parsed.check_swap_tail().expect("hand v5 is well-formed");
+
+        // The v5 body is the v4 body under version 5 plus a zero tail.
+        let v5 = tx.to_bytes();
+        let mut v4 = tx.base.to_bytes();
+        assert_eq!(v5.len(), v4.len() + SWAP_TAIL_BYTES);
+        assert_eq!(
+            u32::from_le_bytes(v5[0..4].try_into().expect("4 bytes")),
+            TX_VERSION_V5
+        );
+        v4[0] = 5;
+        assert_eq!(&v5[..v4.len()], &v4[..], "v5 body = v4 body @ version 5");
+        assert!(v5[v4.len()..].iter().all(|&b| b == 0), "zero tail");
+
+        // Trailing byte / truncation / wrong version rejected.
+        let mut b = v5.clone();
+        b.push(0);
+        assert!(matches!(
+            TxV5::from_bytes(&b),
+            Err(TxV4Error::TrailingBytes)
+        ));
+        assert!(matches!(
+            TxV5::from_bytes(&v5[..v5.len() - 1]),
+            Err(TxV4Error::Truncated)
+        ));
+        let mut b = v5.clone();
+        b[0] = 4;
+        assert!(matches!(TxV5::from_bytes(&b), Err(TxV4Error::Version(4))));
+    }
+
+    #[test]
+    fn tx_v5_tail_canonical_rules() {
+        // Unknown flag.
+        let mut t = hand_v5();
+        t.swap.flag = 9;
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // Plain (flag 0) with a nonzero tail slot.
+        let mut t = hand_v5();
+        t.swap.idx = 1;
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // Lock without H.
+        let mut t = hand_v5();
+        t.swap.flag = 1;
+        t.swap.idx = 1;
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // Lock with a junk spent-swap entry.
+        let mut t = hand_v5();
+        t.swap.flag = 1;
+        t.swap.idx = 1;
+        t.swap.h = Fp::from(7u64);
+        t.swap.entry = Fp::from(9u64);
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // Lock idx beyond the output count (2 outputs in hand_tx).
+        let mut t = hand_v5();
+        t.swap.flag = 1;
+        t.swap.idx = 3;
+        t.swap.h = Fp::from(7u64);
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // Claim with a zero entry.
+        let mut t = hand_v5();
+        t.swap.flag = 2;
+        t.swap.idx = 1;
+        t.swap.h = Fp::from(7u64);
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // Refund carrying a preimage lane.
+        let mut t = hand_v5();
+        t.swap.flag = 3;
+        t.swap.idx = 1;
+        t.swap.h = Fp::from(7u64);
+        t.swap.entry = Fp::from(9u64);
+        t.swap.s0 = Fp::from(1u64);
+        assert!(matches!(
+            TxV5::from_bytes(&t.to_bytes()),
+            Err(TxV4Error::Topology(_))
+        ));
+        // A canonical lock tail parses.
+        let mut t = hand_v5();
+        t.swap.flag = 1;
+        t.swap.idx = 1;
+        t.swap.h = Fp::from(7u64);
+        TxV5::from_bytes(&t.to_bytes()).expect("canonical lock tail parses");
+    }
+
+    #[test]
+    fn tx_v5_sighash_covers_the_swap_tail() {
+        let tx = hand_v5();
+        let base = tx.sighash();
+        // Every tail slot shifts S.
+        let mut t = tx.clone();
+        t.swap.flag = 1;
+        t.swap.idx = 1;
+        t.swap.h = Fp::from(7u64);
+        assert_ne!(t.sighash(), base);
+        let mut t = tx.clone();
+        t.swap.s0 = Fp::from(3u64);
+        assert_ne!(t.sighash(), base);
+        let mut t = tx.clone();
+        t.swap.s1 = Fp::from(4u64);
+        assert_ne!(t.sighash(), base);
+        let mut t = tx.clone();
+        t.swap.entry = Fp::from(5u64);
+        assert_ne!(t.sighash(), base);
+        // Base fields stay covered.
+        let mut t = tx.clone();
+        t.base.fee += 1;
+        assert_ne!(t.sighash(), base);
+        let mut t = tx.clone();
+        t.base.root += Fp::ONE;
+        assert_ne!(t.sighash(), base);
+    }
+
+    #[test]
+    fn wg26_lock_then_claim_end_to_end() {
+        const DEPTH: usize = 8;
+        let preimage = [0x5au8; 32];
+        let (h, s0, s1) = hashlock_swap(&preimage);
+
+        // Alice locks 500 atoms under H: 1-in / 2-out, locked output
+        // first (idx 1), change second. 500 + 450 + 50 fee = 1000 in.
+        let (mut tree, notes, idxs) = fixture_tree(DEPTH, 2);
+        let locked = WalletNoteV4::random(500);
+        let change = WalletNoteV4::random(450);
+        let lock_plan = SpendPlanV4 {
+            inputs: vec![(notes[0].clone(), idxs[0])],
+            outputs: vec![locked.clone(), change],
+            fee: 50,
+            swap: Some(SwapIntent::Lock { idx: 1, h }),
+        };
+        let lock_tx = build_zk_spend_v5::<DEPTH>(&tree, &lock_plan).expect("lock builds");
+        // The locked output is published with its swap-variant leaf
+        // [S4 12 3.1].
+        let (d, a, b, rho) = locked.parts().expect("valid note");
+        assert_ne!(
+            lock_tx.base.leaves[0],
+            locked.leaf_point().expect("plain leaf")
+        );
+        assert_eq!(
+            lock_tx.base.leaves[0],
+            swap_leaf_point_v2(d, a, b, locked.value, rho, h)
+        );
+        assert_eq!(lock_tx.swap.flag, 1);
+        assert_eq!(lock_tx.swap.h, h);
+        assert_eq!(lock_tx.instances_of().len(), SPEND_INSTANCE_SLOTS);
+        confirm_zk_tx_v5::<DEPTH>(&lock_tx, &mut tree, &mut HashSet::new(), FEE_FLOOR_TESTNET)
+            .expect("lock confirms");
+
+        // The tree now holds the SWAP-variant entry, not the plain one.
+        let locked_idx = tree.len() - 2;
+        let locked_entry = tree.leaf(locked_idx).expect("locked leaf appended");
+        assert_eq!(
+            locked_entry,
+            swap_leaf_entry_v2(d, a, b, locked.value, rho, h)
+        );
+        assert_ne!(locked_entry, locked.tree_entry().expect("plain entry"));
+
+        // The lock wire round-trips (tail codec under real material).
+        let parsed = TxV5::from_bytes(&lock_tx.to_bytes()).expect("lock wire parses");
+        assert_eq!(parsed.swap.h, h);
+
+        // Bob claims by revealing the preimage: 500 -> 460 out + 40 fee.
+        let claim_out = WalletNoteV4::random(460);
+        let claim_plan = SpendPlanV4 {
+            inputs: vec![(locked.clone(), locked_idx)],
+            outputs: vec![claim_out.clone()],
+            fee: 40,
+            swap: Some(SwapIntent::Claim { idx: 1, preimage }),
+        };
+        let claim_tx = build_zk_spend_v5::<DEPTH>(&tree, &claim_plan).expect("claim builds");
+        assert_eq!(claim_tx.swap.flag, 2);
+        assert_eq!(claim_tx.swap.h, h);
+        assert_eq!(claim_tx.swap.s0, s0);
+        assert_eq!(claim_tx.swap.s1, s1);
+        assert_eq!(claim_tx.swap.entry, locked_entry, "published swap entry");
+        confirm_zk_tx_v5::<DEPTH>(&claim_tx, &mut tree, &mut HashSet::new(), FEE_FLOOR_TESTNET)
+            .expect("claim confirms");
+        assert_eq!(Some(claim_tx.base.leaves[0]), claim_out.leaf_point());
+
+        // A PLAIN spend of the locked note is rejected at build time: the
+        // tree holds the swap-variant entry only [S4 12 3.1].
+        let plain_plan = SpendPlanV4 {
+            inputs: vec![(locked.clone(), locked_idx)],
+            outputs: vec![WalletNoteV4::random(460)],
+            fee: 40,
+            swap: None,
+        };
+        assert!(matches!(
+            build_zk_spend_v5::<DEPTH>(&tree, &plain_plan),
+            Err(TxV4Error::UnknownLeaf)
+        ));
+    }
+
+    #[test]
+    fn wg26_lock_then_refund_end_to_end() {
+        const DEPTH: usize = 8;
+        let preimage = [0xA5u8; 32];
+        let (h, _, _) = hashlock_swap(&preimage);
+
+        let (mut tree, notes, idxs) = fixture_tree(DEPTH, 2);
+        let locked = WalletNoteV4::random(500);
+        let change = WalletNoteV4::random(450);
+        let lock_plan = SpendPlanV4 {
+            inputs: vec![(notes[0].clone(), idxs[0])],
+            outputs: vec![locked.clone(), change],
+            fee: 50,
+            swap: Some(SwapIntent::Lock { idx: 1, h }),
+        };
+        let lock_tx = build_zk_spend_v5::<DEPTH>(&tree, &lock_plan).expect("lock builds");
+        confirm_zk_tx_v5::<DEPTH>(&lock_tx, &mut tree, &mut HashSet::new(), FEE_FLOOR_TESTNET)
+            .expect("lock confirms");
+        let locked_idx = tree.len() - 2;
+
+        // The lock owner refunds WITHOUT the preimage: empty lanes.
+        let refund_out = WalletNoteV4::random(460);
+        let refund_plan = SpendPlanV4 {
+            inputs: vec![(locked.clone(), locked_idx)],
+            outputs: vec![refund_out.clone()],
+            fee: 40,
+            swap: Some(SwapIntent::Refund { idx: 1, h }),
+        };
+        let refund_tx = build_zk_spend_v5::<DEPTH>(&tree, &refund_plan).expect("refund builds");
+        assert_eq!(refund_tx.swap.flag, 3);
+        assert_eq!(refund_tx.swap.s0, Fp::ZERO);
+        assert_eq!(refund_tx.swap.s1, Fp::ZERO);
+        let (d, a, b, rho) = locked.parts().expect("valid note");
+        assert_eq!(
+            refund_tx.swap.entry,
+            swap_leaf_entry_v2(d, a, b, locked.value, rho, h)
+        );
+        confirm_zk_tx_v5::<DEPTH>(
+            &refund_tx,
+            &mut tree,
+            &mut HashSet::new(),
+            FEE_FLOOR_TESTNET,
+        )
+        .expect("refund confirms");
+        assert_eq!(Some(refund_tx.base.leaves[0]), refund_out.leaf_point());
     }
 }
