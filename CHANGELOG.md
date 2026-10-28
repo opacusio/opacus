@@ -174,6 +174,21 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   seq/content binding of the seal/open construction and the cleartext
   rejection at the node level; the existing node-to-node tests now run
   entirely over the encrypted path.
+  new vk (v0.8).
+  change; proofs/keysets from earlier builds do not verify against the
+  now enforced, not just honestly assigned. BREAKING: circuit layout
+  spend-poseidon-init gate: the zero start of every spend-hash chain is
+  cold and the steady-state numbers. Also enables the previously-dead
+  inside the 10 s budget [S4 8] end to end. The bench now gates BOTH the
+  in 4,81 s with steady-state prove at 2,26 s and verify 0,03 s -
+  circuit layout changed. The whole cold pipeline (keygen included) runs
+  ROUNDS, MDS, round constants, domain tags) are unchanged; only the
+  5103 -> 1551 rows (k = 13 -> 11). Protocol Poseidon constants (T,
+  PERM_ROWS = 17 rows instead of 65 and the mainnet MAX topology drops
+  every gate row of the v4 spend circuit - one permutation costs
+- opacus-zk (PROVER-10S): PER_BLOCK = 4 Poseidon rounds are fused into
+
+### Changed
 
 ## [0.7.0] - 2026-10-23
 

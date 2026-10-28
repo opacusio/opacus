@@ -245,9 +245,14 @@ Test status (zero warnings in all crates):
 | opacus-dex | 14 |
 | opacus-network | 67 |
 
-Performance: a membership-only spend proof at mainnet tree depth (2^32 leaves) proves and verifies in about 2.1 s.
-The full v4 spend pipeline (real IPA, k = 13) runs on a process-wide keyset cache (WG-17): the first prove of a process pays the one-time keygen (~16 s cold), every later prove runs at steady-state 7.3-8.0 s and verification drops to about 0.1 s - inside the 10 s budget [S4 8].
-The budget is enforced on the steady-state number by `cargo bench -p opacus-zk --features real-prover --bench prover`; the cold-start number is recorded there for the future EC-chain column / membership-path work.
+Performance: a membership-only spend proof at mainnet tree depth (2^32
+leaves) proves and verifies in about 2.1 s. The full v4 spend pipeline
+(real IPA, k = 11) runs on a process-wide keyset cache (WG-17): since
+PROVER-10S fuses 4 Poseidon rounds into every gate row, the WHOLE
+pipeline (keygen included) runs in 4,81 s cold, 2,26 s at
+steady-state prove with 0,03 s verify - inside the 10 s budget
+[S4 8] end to end. The bench gates BOTH numbers: `cargo bench -p
+opacus-zk --features real-prover --bench prover`.
 
 ## Sepolia deployment (zero-typing PowerShell chain)
 
@@ -292,10 +297,10 @@ note transmission between wallets (crates/opacus-network, phases N1-N3).
 Shipped in v0.7 (protocol + hardening): the N3b swap-plane upgrade frame
 and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
 
-- Delivered (WG-17): prover keyset cache - steady-state prove 7.3-8.0 s
-  and verify about 0.1 s at mainnet depth, inside the 10 s budget [S4 8].
-  Cold-start reduction (EC-chain column count, membership-path count)
-  remains future work.
+- Delivered (PROVER-10S): 4 Poseidon rounds fused per gate row - the
+  mainnet MAX topology dropped 5103 -> 1551 rows (k = 13 -> 11) and the
+  whole cold pipeline (keygen included) runs in 4,81 s with
+  steady-state prove at 2,26 s - inside the 10 s budget [S4 8].
 - Hashlock-in-circuit and CLSAG adaptor signatures for on-chain swap
   enforcement (Refund frames are notices in v0.1).
 - External security audit before any mainnet use - MANDATORY gate, see

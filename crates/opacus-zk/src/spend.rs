@@ -76,9 +76,10 @@
 //! # Row budget
 //!
 //! The full MAX topology at mainnet depth (2^32 leaves, DEPTH = 32) uses
-//! `rows_needed(32) = 5103` rows, well inside the k = 13 budget of [S4 8]
-//! (8192 rows). The wallet topology (1-in / 2-out) at DEPTH = 4 (tests)
-//! fits k = 11.
+//! `rows_needed(32) = 1551` rows, well inside the k = 11 budget of [S4 8]
+//! (2048 rows; PROVER-10S fuses PER_BLOCK = 4 Poseidon rounds into every
+//! gate row, so one permutation costs PERM_ROWS = 17 rows instead of 65).
+//! The wallet topology (1-in / 2-out) at DEPTH = 4 (tests) fits k = 10.
 
 use ff::{Field, PrimeField};
 use group::prime::PrimeCurveAffine;
@@ -108,8 +109,14 @@ pub const MAX_IN: usize = 2;
 /// Maximum number of created notes per transaction [S4 7, S4 8].
 pub const MAX_OUT: usize = 4;
 
-/// Rows consumed by one Poseidon permutation (64 round rows + final row).
-pub const PERM_ROWS: usize = ROUNDS + 1;
+/// Poseidon rounds fused into one gate row (PROVER-10S): the 64-round
+/// permutation is laid out as 16 block rows of 4 fused rounds plus one
+/// final row. Cuts the mainnet row budget 5103 -> 1551 (k 13 -> 11) and
+/// the cold pipeline below the 10 s budget [S4 8] without touching the
+/// protocol constants (T, ROUNDS, MDS, round constants are unchanged).
+pub const PER_BLOCK: usize = 4;
+/// Rows consumed by one Poseidon permutation (16 block rows + final row).
+pub const PERM_ROWS: usize = ROUNDS / PER_BLOCK + 1;
 /// Rows of one value region: rc-limb (5 rows) + fixed-base RC chain.
 pub const VALUE_REGION_ROWS: usize = 1 + N_LIMBS + 2 * 16;
 /// Rows of the leaf chain: init row + 16 rows for `[s] * G` + 16 rows for
@@ -399,31 +406,50 @@ fn chain_rows(bits_rows: &[[Fp; 16]], mults_rows: &[[(Fp, Fp); 16]]) -> Vec<RowV
 // SpendHashConfig: Poseidon permutations with optional witness domain
 // ---------------------------------------------------------------------------
 
-/// Configuration of the spend Poseidon gadget: the v0.3.0/Phase 1a round
-/// gate generalized so that the CAPACITY input at round 0 is either a
-/// fixed protocol domain constant (nullifier, leaf, tree, entry chains)
-/// or a witnessed diversifier cell `D` (the key chain `s = P(D, a+b,
-/// a*b)` [S4 3]). A witness domain cannot live in the fixed `domain`
+/// Configuration of the spend Poseidon gadget (PROVER-10S block packing):
+/// the v0.3.0/Phase 1a round gate generalized so that the CAPACITY input at
+/// round 0 is either a fixed protocol domain constant (nullifier, leaf,
+/// tree, entry chains) or a witnessed diversifier cell `D` (the key chain
+/// `s = P(D, a+b, a*b)` [S4 3]), with PER_BLOCK full rounds fused into
+/// every gate row. A witness domain cannot live in the fixed `domain`
 /// column (fixed cells are part of the verification key), so the witness
 /// variant feeds a dedicated advice column that the masking constraints
-/// force to zero outside round 0 - mirroring the absorb-input masking of
-/// the v0.3.0 gate.
+/// force to zero outside the first block - mirroring the absorb-input
+/// masking of the v0.3.0 gate.
+///
+/// Layout of one permutation (PERM_ROWS = ROUNDS / PER_BLOCK + 1 rows):
+/// block row b carries the state entering round PER_BLOCK * b in `state`,
+/// the S-box inputs of its PER_BLOCK fused sub-rounds in `u`, and the
+/// intermediate fused sub-round outputs (sub-rounds 0..PER_BLOCK-2) in
+/// `xm`; the LAST fused sub-round's output is the NEXT row's `state`
+/// cell. The final row carries the state after all ROUNDS rounds. Every
+/// constraint keeps the degree of the v0.3.0 round gate: the S-box input
+/// is a cell, so the x^5 term is degree 5 and the selector adds one.
 #[derive(Clone, Debug)]
 pub struct SpendHashConfig {
-    /// Poseidon state columns [s0, s1, s2].
+    /// Poseidon state columns [s0, s1, s2]: the state entering each block
+    /// row (and the final state on the last row).
     pub state: [Column<Advice>; 3],
-    /// Absorb input columns [in0, in1].
+    /// S-box input of fused sub-round j, lane k: u[j * 3 + k].
+    pub u: [Column<Advice>; 3 * PER_BLOCK],
+    /// State after fused sub-round j (j = 0..PER_BLOCK-2), lane k:
+    /// xm[j * 3 + k]; the last sub-round's output is the next row's
+    /// `state` cell.
+    pub xm: [Column<Advice>; 3 * (PER_BLOCK - 1)],
+    /// Absorb input columns [in0, in1] (first block, sub-round 0 only).
     pub absorb: [Column<Advice>; 2],
-    /// Witness domain cell (round 0 only; zero in fixed-domain mode).
+    /// Witness domain cell (first block, sub-round 0 only; zero in
+    /// fixed-domain mode).
     pub dom_in: Column<Advice>,
-    /// Round-constant columns.
-    pub rc: [Column<Fixed>; 3],
+    /// Round-constant columns: the constant of fused sub-round j, lane k
+    /// is rc[j * 3 + k].
+    pub rc: [Column<Fixed>; 3 * PER_BLOCK],
     /// Fixed protocol domain (capacity) constant.
     pub domain: Column<Fixed>,
-    /// Absorb flag (1 at round 0, 0 elsewhere).
+    /// Absorb flag (1 at the first block, 0 elsewhere).
     pub is_absorb: Column<Fixed>,
-    /// Poseidon round gate.
-    pub s_round: Selector,
+    /// Poseidon block gate (PER_BLOCK fused rounds).
+    pub s_block: Selector,
     /// Initial-state-is-zero gate.
     pub s_init: Selector,
 }
@@ -435,16 +461,15 @@ impl SpendHashConfig {
             meta.advice_column(),
             meta.advice_column(),
         ];
+        let u: [Column<Advice>; 3 * PER_BLOCK] = std::array::from_fn(|_| meta.advice_column());
+        let xm: [Column<Advice>; 3 * (PER_BLOCK - 1)] =
+            std::array::from_fn(|_| meta.advice_column());
         let absorb = [meta.advice_column(), meta.advice_column()];
         let dom_in = meta.advice_column();
-        let rc = [
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-        ];
+        let rc: [Column<Fixed>; 3 * PER_BLOCK] = std::array::from_fn(|_| meta.fixed_column());
         let domain = meta.fixed_column();
         let is_absorb = meta.fixed_column();
-        let s_round = meta.selector();
+        let s_block = meta.selector();
         let s_init = meta.selector();
 
         for c in state.iter().chain(absorb.iter()) {
@@ -452,57 +477,108 @@ impl SpendHashConfig {
         }
         meta.enable_equality(dom_in);
 
-        // Poseidon round transition with fused absorb + input masking,
+        // Poseidon block transition with fused absorb + input masking,
         // generalized for the witness domain (identical algebra to the
-        // v0.3.0 gate otherwise).
-        meta.create_gate("spend-poseidon-round", |meta| {
-            let sel = meta.query_selector(s_round);
-            let s0 = meta.query_advice(state[0], Rotation::cur());
-            let s1 = meta.query_advice(state[1], Rotation::cur());
-            let s2 = meta.query_advice(state[2], Rotation::cur());
+        // v0.3.0 gate otherwise). Sub-round j of a block reads its state
+        // input from `state` (j = 0) or from `xm` (j > 0), adds the
+        // round constant (and, at the very first sub-round only, the
+        // absorb inputs / the capacity domain), applies the x^5 S-box and
+        // mixes with the MDS row [2, 1, 1]. The last fused sub-round of
+        // the block writes the next row's `state` cells.
+        meta.create_gate("spend-poseidon-block", |meta| {
+            let sel = meta.query_selector(s_block);
+            let sc: Vec<Expression<Fp>> = (0..3)
+                .map(|k| meta.query_advice(state[k], Rotation::cur()))
+                .collect();
+            let sn: Vec<Expression<Fp>> = (0..3)
+                .map(|k| meta.query_advice(state[k], Rotation::next()))
+                .collect();
             let in0 = meta.query_advice(absorb[0], Rotation::cur());
             let in1 = meta.query_advice(absorb[1], Rotation::cur());
             let din = meta.query_advice(dom_in, Rotation::cur());
-            let rc0 = meta.query_fixed(rc[0]);
-            let rc1 = meta.query_fixed(rc[1]);
-            let rc2 = meta.query_fixed(rc[2]);
-            let dom = meta.query_fixed(domain);
+            let uq: Vec<Expression<Fp>> = (0..3 * PER_BLOCK)
+                .map(|c| meta.query_advice(u[c], Rotation::cur()))
+                .collect();
+            let xmq: Vec<Expression<Fp>> = (0..3 * (PER_BLOCK - 1))
+                .map(|c| meta.query_advice(xm[c], Rotation::cur()))
+                .collect();
+            let rcq: Vec<Expression<Fp>> = (0..3 * PER_BLOCK)
+                .map(|c| meta.query_fixed(rc[c]))
+                .collect();
+            let domq = meta.query_fixed(domain);
             let flag = meta.query_fixed(is_absorb);
-            let n0 = meta.query_advice(state[0], Rotation::next());
-            let n1 = meta.query_advice(state[1], Rotation::next());
-            let n2 = meta.query_advice(state[2], Rotation::next());
-
-            let u0 = s0 + in0.clone() + rc0;
-            let u1 = s1 + in1.clone() + rc1;
-            let u2 = s2 + dom + din.clone() + rc2;
-
-            let fiv = |x: Expression<Fp>| {
-                let a = x.clone();
-                let b = a.clone() * a;
-                b.clone() * b * x // x^5
-            };
-            let p0 = fiv(u0);
-            let p1 = fiv(u1);
-            let p2 = fiv(u2);
-
-            let m = |v: u64| Expression::Constant(Fp::from(v));
-            let o0 = m(2) * p0.clone() + m(1) * p1.clone() + m(1) * p2.clone();
-            let o1 = m(1) * p0.clone() + m(2) * p1.clone() + m(1) * p2.clone();
-            let o2 = m(1) * p0 + m(1) * p1 + m(2) * p2;
 
             let one = Expression::Constant(Fp::ONE);
-            let mask0 = in0 * (one.clone() - flag.clone());
-            let mask1 = in1 * (one.clone() - flag.clone());
-            let maskd = din * (one - flag);
+            let fiv = |e: Expression<Fp>| {
+                let a = e.clone() * e.clone();
+                a.clone() * a * e
+            };
 
-            vec![
-                sel.clone() * (n0 - o0),
-                sel.clone() * (n1 - o1),
-                sel.clone() * (n2 - o2),
-                sel.clone() * mask0,
-                sel.clone() * mask1,
-                sel * maskd,
-            ]
+            let mut cs: Vec<Expression<Fp>> = Vec::new();
+
+            // Sub-round inputs: x_j + (absorb at sub-round 0) + rc_j. The
+            // capacity slot of the very first sub-round also takes the
+            // fixed protocol domain (fixed-domain mode) or the witnessed
+            // diversifier cell (witness-domain mode).
+            for j in 0..PER_BLOCK {
+                for k in 0..3 {
+                    let x = if j == 0 {
+                        sc[k].clone()
+                    } else {
+                        xmq[(j - 1) * 3 + k].clone()
+                    };
+                    let inj: Expression<Fp> = if j == 0 {
+                        match k {
+                            0 => in0.clone(),
+                            1 => in1.clone(),
+                            _ => din.clone(),
+                        }
+                    } else {
+                        Expression::Constant(Fp::ZERO)
+                    };
+                    let dom_term: Expression<Fp> = if j == 0 && k == 2 {
+                        domq.clone()
+                    } else {
+                        Expression::Constant(Fp::ZERO)
+                    };
+                    cs.push(
+                        sel.clone()
+                            * (uq[j * 3 + k].clone() - x - inj - dom_term - rcq[j * 3 + k].clone()),
+                    );
+                }
+            }
+
+            // Fused mix: x_{j+1} = M * u_j^5. Sub-rounds 0..PER_BLOCK-2
+            // land in `xm`, the last one in the next row's `state`.
+            for j in 0..PER_BLOCK {
+                let p0 = fiv(uq[j * 3].clone());
+                let p1 = fiv(uq[j * 3 + 1].clone());
+                let p2 = fiv(uq[j * 3 + 2].clone());
+                for k in 0..3 {
+                    let (w0, w1, w2) = match k {
+                        0 => (2u64, 1u64, 1u64),
+                        1 => (1u64, 2u64, 1u64),
+                        _ => (1u64, 1u64, 2u64),
+                    };
+                    let o = Expression::Constant(Fp::from(w0)) * p0.clone()
+                        + Expression::Constant(Fp::from(w1)) * p1.clone()
+                        + Expression::Constant(Fp::from(w2)) * p2.clone();
+                    let target = if j < PER_BLOCK - 1 {
+                        xmq[j * 3 + k].clone()
+                    } else {
+                        sn[k].clone()
+                    };
+                    cs.push(sel.clone() * (target - o));
+                }
+            }
+
+            // Masking: the absorb inputs and the witness domain ride the
+            // FIRST block only (the flag is a fixed, vk-pinned column).
+            cs.push(sel.clone() * (in0 * (one.clone() - flag.clone())));
+            cs.push(sel.clone() * (in1 * (one.clone() - flag.clone())));
+            cs.push(sel * (din * (one - flag)));
+
+            cs
         });
 
         // Initial state must be zero; the domain enters through the fixed
@@ -522,12 +598,14 @@ impl SpendHashConfig {
 
         Self {
             state,
+            u,
+            xm,
             absorb,
             dom_in,
             rc,
             domain,
             is_absorb,
-            s_round,
+            s_block,
             s_init,
         }
     }
@@ -560,58 +638,114 @@ impl SpendHashConfig {
         a.copy_advice(|| "spend-in0", region, self.absorb[0], base)?;
         b.copy_advice(|| "spend-in1", region, self.absorb[1], base)?;
 
+        // Honest simulation of all ROUNDS (mirrors the block gate): the
+        // state entering every round and every sub-round's S-box input are
+        // recorded, so the block rows can be assigned without re-deriving
+        // anything.
+        let fiv = |x: Value<Fp>| {
+            let a = x;
+            let b = a * a;
+            b * b * a
+        };
+        let two = Value::known(Fp::from(2u64));
         let mut s = [zero(), zero(), zero()];
+        let mut st_all: Vec<[Value<Fp>; 3]> = Vec::with_capacity(ROUNDS + 1);
+        let mut u_all: Vec<[Value<Fp>; 3]> = Vec::with_capacity(ROUNDS);
+        st_all.push([s[0], s[1], s[2]]);
         for r in 0..ROUNDS {
-            for k in 0..3 {
-                region.assign_advice(
-                    || format!("state{}-r{}", k, r),
-                    self.state[k],
-                    base + r,
-                    || s[k],
-                )?;
-            }
             let iv0 = if r == 0 { in0v } else { zero() };
             let iv1 = if r == 0 { in1v } else { zero() };
             let dv = if r == 0 { domv } else { zero() };
-            region.assign_advice(|| "in0", self.absorb[0], base + r, || iv0)?;
-            region.assign_advice(|| "in1", self.absorb[1], base + r, || iv1)?;
-            region.assign_advice(|| "dom-in", self.dom_in, base + r, || dv)?;
-            region.assign_fixed(|| "rc0", self.rc[0], base + r, || Value::known(rcs[r][0]))?;
-            region.assign_fixed(|| "rc1", self.rc[1], base + r, || Value::known(rcs[r][1]))?;
-            region.assign_fixed(|| "rc2", self.rc[2], base + r, || Value::known(rcs[r][2]))?;
-            let dom = if r == 0 { fd } else { Fp::ZERO };
-            let flag = if r == 0 { Fp::ONE } else { Fp::ZERO };
-            region.assign_fixed(|| "domain", self.domain, base + r, || Value::known(dom))?;
-            region.assign_fixed(|| "absorb", self.is_absorb, base + r, || Value::known(flag))?;
-            self.s_round.enable(region, base + r)?;
-
-            // Honest simulation of the next state (mirrors the gate).
-            let rc0 = Value::known(rcs[r][0]);
-            let rc1 = Value::known(rcs[r][1]);
-            let rc2 = Value::known(rcs[r][2]);
-            let u0 = s[0] + iv0 + rc0;
-            let u1 = s[1] + iv1 + rc1;
-            let u2 = s[2] + dv + Value::known(dom) + rc2;
-            let fiv = |x: Value<Fp>| {
-                let a = x;
-                let b = a * a;
-                b * b * x
-            };
-            let p0 = fiv(u0);
-            let p1 = fiv(u1);
-            let p2 = fiv(u2);
-            let two = Value::known(Fp::from(2u64));
+            let dom_add = if r == 0 { Value::known(fd) } else { zero() };
+            let u0 = s[0] + iv0 + Value::known(rcs[r][0]);
+            let u1 = s[1] + iv1 + Value::known(rcs[r][1]);
+            let u2 = s[2] + dv + dom_add + Value::known(rcs[r][2]);
+            let u = [u0, u1, u2];
+            let p0 = fiv(u[0]);
+            let p1 = fiv(u[1]);
+            let p2 = fiv(u[2]);
             let n0 = p0 * two + p1 + p2;
             let n1 = p0 + p1 * two + p2;
             let n2 = p0 + p1 + p2 * two;
+            u_all.push(u);
             s = [n0, n1, n2];
+            st_all.push([s[0], s[1], s[2]]);
         }
 
-        let fr = base + ROUNDS;
+        // Zero-initial-state pin (PROVER-10S rider): the v0.3.0 code
+        // defined the init gate but never enabled it - the zero chain
+        // start was enforced only by honest assignment.
+        self.s_init.enable(region, base)?;
+
+        // Block-wise assignment: block row b carries rounds
+        // PER_BLOCK * b .. PER_BLOCK * (b + 1) - 1.
+        for b in 0..ROUNDS / PER_BLOCK {
+            let rb = base + b;
+            for k in 0..3 {
+                region.assign_advice(
+                    || format!("state{}-b{}", k, b),
+                    self.state[k],
+                    rb,
+                    || st_all[b * PER_BLOCK][k],
+                )?;
+            }
+            let (iv0, iv1, dv) = if b == 0 {
+                (in0v, in1v, domv)
+            } else {
+                (zero(), zero(), zero())
+            };
+            region.assign_advice(|| "in0", self.absorb[0], rb, || iv0)?;
+            region.assign_advice(|| "in1", self.absorb[1], rb, || iv1)?;
+            region.assign_advice(|| "dom-in", self.dom_in, rb, || dv)?;
+            for j in 0..PER_BLOCK {
+                let r = b * PER_BLOCK + j;
+                for k in 0..3 {
+                    region.assign_advice(
+                        || format!("u{}-r{}", j, r),
+                        self.u[j * 3 + k],
+                        rb,
+                        || u_all[r][k],
+                    )?;
+                }
+                if j < PER_BLOCK - 1 {
+                    for k in 0..3 {
+                        region.assign_advice(
+                            || format!("xm{}-r{}", j, r),
+                            self.xm[j * 3 + k],
+                            rb,
+                            || st_all[r + 1][k],
+                        )?;
+                    }
+                }
+            }
+            for j in 0..PER_BLOCK {
+                let r = b * PER_BLOCK + j;
+                for k in 0..3 {
+                    region.assign_fixed(
+                        || format!("rc{}-r{}", j, r),
+                        self.rc[j * 3 + k],
+                        rb,
+                        || Value::known(rcs[r][k]),
+                    )?;
+                }
+            }
+            let dom_fixed = if b == 0 { fd } else { Fp::ZERO };
+            let flag = if b == 0 { Fp::ONE } else { Fp::ZERO };
+            region.assign_fixed(|| "domain", self.domain, rb, || Value::known(dom_fixed))?;
+            region.assign_fixed(|| "absorb", self.is_absorb, rb, || Value::known(flag))?;
+            self.s_block.enable(region, rb)?;
+        }
+
+        // Final row: the state after all ROUNDS; no gate enabled.
+        let fr = base + ROUNDS / PER_BLOCK;
         let mut out = None;
         for k in 0..3 {
-            let c =
-                region.assign_advice(|| format!("state{}-final", k), self.state[k], fr, || s[k])?;
+            let c = region.assign_advice(
+                || format!("state{}-final", k),
+                self.state[k],
+                fr,
+                || st_all[ROUNDS][k],
+            )?;
             if k == 0 {
                 out = Some(c);
             }
@@ -619,9 +753,9 @@ impl SpendHashConfig {
         region.assign_advice(|| "in0", self.absorb[0], fr, zero)?;
         region.assign_advice(|| "in1", self.absorb[1], fr, zero)?;
         region.assign_advice(|| "dom-in", self.dom_in, fr, zero)?;
-        region.assign_fixed(|| "rc0", self.rc[0], fr, zero)?;
-        region.assign_fixed(|| "rc1", self.rc[1], fr, zero)?;
-        region.assign_fixed(|| "rc2", self.rc[2], fr, zero)?;
+        for c in 0..3 * PER_BLOCK {
+            region.assign_fixed(|| format!("rc-final-{}", c), self.rc[c], fr, zero)?;
+        }
         region.assign_fixed(|| "domain", self.domain, fr, zero)?;
         region.assign_fixed(|| "absorb", self.is_absorb, fr, zero)?;
 
@@ -1567,7 +1701,7 @@ impl<const DEPTH: usize> V4SpendCircuit<DEPTH> {
     }
 
     /// Smallest k such that the circuit fits, with a margin for the
-    /// instance rows and blinding [S4 8: k <= 13].
+    /// instance rows and blinding [S4 8: k <= 11].
     pub fn required_k() -> u32 {
         let rows = Self::rows_needed() + 64;
         let mut k = 1u32;
@@ -1836,8 +1970,8 @@ mod tests {
     use halo2_proofs::dev::MockProver;
     use rand::rngs::OsRng;
 
-    /// Row budget from [S4 8]: the v4 design MUST stay within k = 13.
-    const K_BUDGET_ROWS: usize = 1 << 13;
+    /// Row budget from [S4 8]: the v4 design MUST stay within k = 11.
+    const K_BUDGET_ROWS: usize = 1 << 11;
     /// Test tree depth (the v0.3.0 test convention).
     const DEPTH: usize = 4;
 
@@ -1953,10 +2087,10 @@ mod tests {
         prover.verify().unwrap();
 
         // Row budget [S4 8]: the FULL MAX topology at mainnet depth must
-        // stay inside k = 13.
+        // stay inside k = 11.
         assert!(V4SpendCircuit::<DEPTH>::rows_needed() < K_BUDGET_ROWS);
         assert!(V4SpendCircuit::<32>::rows_needed() < K_BUDGET_ROWS);
-        assert_eq!(V4SpendCircuit::<32>::required_k(), 13);
+        assert_eq!(V4SpendCircuit::<32>::required_k(), 11);
     }
 
     #[test]
