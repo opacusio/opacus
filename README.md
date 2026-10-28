@@ -11,7 +11,7 @@ wrapped token (wOPACUS), a DEX/bridge toolchain, and an atomic-swap stack for
 Monero <-> Opacus exchange, together with a zero-typing Windows (PowerShell)
 tooling chain.
 
-> **Status: v0.7.0: the P2P networking layer is live - authenticated peer
+> **Status: v0.8.0: the P2P networking layer is live - authenticated peer
 > identity (DLEq-bound handshake, secret zeroized in memory), persistent
 > peer discovery with disco gossip, encrypted note transmission between
 > wallets, and an Upgrade frame that hands an authenticated connection
@@ -30,7 +30,7 @@ cargo build --release
 cargo test --workspace
 ```
 
-Typical timings on a modern machine (as of v0.7.0): clone ~20 s, release build ~2 min, full test run ~15-16 min - the consensus and wallet suites dominate it. 188 tests pass by default (0 failures); 3 slow full-depth (2^32 leaves) proof tests are ignored by default and can be run with:
+Typical timings on a modern machine (as of v0.8.0): clone ~20 s, release build ~2 min, full test run ~15-16 min - the consensus and wallet suites dominate it. 258 tests pass by default (0 failures); 3 slow full-depth (2^32 leaves) proof tests are ignored by default and can be run with:
 
 ```
 cargo test --workspace -- --ignored
