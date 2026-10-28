@@ -240,10 +240,10 @@ Test status (zero warnings in all crates):
 | opacus-zk | 44 default + 2 real-prover (+1 ignored mainnet-depth mock, k = 12) |
 | opacus-wallet | 14 fast + 2 mainnet-depth end-to-end (ignored by default; run with `cargo test -p opacus-wallet -- --ignored`) |
 | opacus-consensus | 10 (real IPA proofs, depth 8) |
-| opacus-node | 8 |
-| opacus-bridge | 28 |
-| opacus-dex | 14 |
-| opacus-network | 67 |
+| opacus-node | 15 |
+| opacus-bridge | 67 |
+| opacus-dex | 16 |
+| opacus-network | 80 |
 
 Performance: a membership-only spend proof at mainnet tree depth (2^32
 leaves) proves and verifies in about 2.1 s. The full v4 spend pipeline
