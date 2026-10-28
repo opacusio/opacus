@@ -240,6 +240,7 @@ Test status (zero warnings in all crates):
 | opacus-zk | 44 default + 2 real-prover (+1 ignored mainnet-depth mock, k = 12) |
 | opacus-wallet | 14 fast + 2 mainnet-depth end-to-end (ignored by default; run with `cargo test -p opacus-wallet -- --ignored`) |
 | opacus-consensus | 10 (real IPA proofs, depth 8) |
+| opacus-crypto | 10 |
 | opacus-node | 15 |
 | opacus-bridge | 67 |
 | opacus-dex | 16 |
