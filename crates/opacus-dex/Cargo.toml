@@ -1,6 +1,6 @@
 [package]
 name = "opacus-dex"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Uniswap integration for Opacus: EIP-155 tx signing, Uniswap V2 router calldata, wOPACUS helpers"

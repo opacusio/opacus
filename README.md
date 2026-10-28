@@ -312,7 +312,7 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
 `CHANGELOG.md` follows the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and
 [Semantic Versioning](https://semver.org/). The current release is
-**v0.7.0** (swap-plane upgrade frame + zeroized identity secret).
+**v0.8.0** (BIP-39 wallet keys + fused Poseidon spend circuit, k = 11).
 
 ## License
 

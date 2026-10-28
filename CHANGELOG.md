@@ -12,6 +12,8 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-28
+
 ### Added
 
 - `bip39` 3.0 dependency (rust-bitcoin org, `zeroize` feature) via
