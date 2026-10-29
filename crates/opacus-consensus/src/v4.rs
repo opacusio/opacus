@@ -480,9 +480,9 @@ pub fn confirm_v4_consensus<const DEPTH: usize>(
 /// - R1  CLAIM only while `height < T`, `T = H_lock + W_claim` (strict);
 /// - R2  REFUND only while `height >= T` (inclusive; no preimage);
 /// - R3  a swap terminalizes exactly once (registry removal + the
-///       permanent nullifier seen-set);
+///   permanent nullifier seen-set);
 /// - R4  unknown/not-LOCKed swap id rejected (registry + the circuit
-///       swap-variant membership proof).
+///   swap-variant membership proof).
 pub fn confirm_v5_consensus<const DEPTH: usize>(
     tx: &TxV5,
     params: &ConsensusParams,
@@ -923,7 +923,7 @@ mod tests {
         let fund = WalletNoteV4::random(1_000);
         let locked = WalletNoteV4::random(500);
         let change = WalletNoteV4::random(450);
-        let mut st = funded_state(&[fund.clone()]);
+        let mut st = funded_state(std::slice::from_ref(&fund));
         let wire = lock_wire(st.tree(), &fund, 0, &locked, &change, h);
         let acc = accept_transaction::<DEPTH>(&params(), ACT, &wire, &mut st)
             .expect("lock accepted at the lock height");
@@ -1148,7 +1148,7 @@ mod tests {
         // The v5 accept path carries plain (zero-tail) transactions
         // too: accepted like v4, with no swap-registry effects.
         let fund = WalletNoteV4::random(1_000);
-        let mut st = funded_state(&[fund.clone()]);
+        let mut st = funded_state(std::slice::from_ref(&fund));
         let plan = SpendPlanV4 {
             inputs: vec![(fund, 0)],
             outputs: vec![WalletNoteV4::random(900)],
