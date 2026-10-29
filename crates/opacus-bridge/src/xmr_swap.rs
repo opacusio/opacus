@@ -212,10 +212,15 @@ impl SwapSession {
     }
 
     /// Taker reveals the preimage and claims GHOST.
+    /// WG-18: consensus [R5] - the claim is valid while `current_height < T`
+    /// (strict); at h == T the claim is late.
     pub fn claim(&mut self, preimage: &[u8; 32], current_height: u64) -> Result<(), SwapError> {
         self.require(Phase::GhostLocked, Role::Taker)?;
-        let deadline = self.both_locked_height.unwrap_or(0) + self.offer.claim_timeout_blocks;
-        if current_height > deadline {
+        let deadline = self
+            .both_locked_height
+            .unwrap_or(0)
+            .saturating_add(self.offer.claim_timeout_blocks);
+        if current_height >= deadline {
             self.phase = Phase::Refunded;
             return Err(SwapError::NotTimedOut);
         }
@@ -227,7 +232,7 @@ impl SwapSession {
         Ok(())
     }
 
-    /// Timeout refund. Valid only after the corresponding deadline.
+    /// Timeout refund. Valid once the deadline is reached (h >= T, [R5]).
     pub fn refund(&mut self, current_height: u64) -> Result<(), SwapError> {
         match (self.phase, self.role) {
             // taker locked nothing yet, or the lock window passed
@@ -238,9 +243,11 @@ impl SwapSession {
             }
             // maker locked GHOST but taker never claimed
             (Phase::GhostLocked, Role::Maker) => {
-                let deadline =
-                    self.both_locked_height.unwrap_or(0) + self.offer.claim_timeout_blocks;
-                if current_height <= deadline {
+                let deadline = self
+                    .both_locked_height
+                    .unwrap_or(0)
+                    .saturating_add(self.offer.claim_timeout_blocks);
+                if current_height < deadline {
                     return Err(SwapError::NotTimedOut);
                 }
             }
@@ -332,8 +339,37 @@ mod tests {
         maker.mark_xmr_locked(110).unwrap();
         maker.mark_ghost_locked(120).unwrap();
         // deadline 120 + 200 = 320
-        assert_eq!(maker.refund(320), Err(SwapError::NotTimedOut));
-        maker.refund(321).unwrap();
+        assert_eq!(maker.refund(319), Err(SwapError::NotTimedOut));
+        maker.refund(320).unwrap();
+        assert_eq!(maker.phase, Phase::Refunded);
+    }
+
+    /// WG-18: consensus [R5] alignment - at h == T the claim is LATE
+    /// (strict `h < T`); the session flips to `Refunded` (coordination hint).
+    #[test]
+    fn wg18_claim_at_deadline_is_late() {
+        let mut maker = SwapSession::make_offer(offer(), 100);
+        let mut taker = SwapSession::accept(offer(), 105);
+        taker.lock_xmr(110).unwrap();
+        maker.mark_xmr_locked(110).unwrap();
+        maker.mark_ghost_locked(120).unwrap();
+        taker.mark_ghost_locked(120).unwrap();
+        // deadline = 120 + 200 = 320: claiming exactly at the deadline is late
+        assert_eq!(taker.claim(&[42u8; 32], 320), Err(SwapError::NotTimedOut));
+        assert_eq!(taker.phase, Phase::Refunded);
+    }
+
+    /// WG-18: the maker refund is valid from the deadline itself ([R5],
+    /// inclusive `h >= T`), not only strictly after it.
+    #[test]
+    fn wg18_refund_at_deadline_is_valid() {
+        let mut maker = SwapSession::make_offer(offer(), 100);
+        let mut taker = SwapSession::accept(offer(), 105);
+        taker.lock_xmr(110).unwrap();
+        maker.mark_xmr_locked(110).unwrap();
+        maker.mark_ghost_locked(120).unwrap();
+        // deadline = 120 + 200 = 320: refund at exactly h == T succeeds
+        maker.refund(320).unwrap();
         assert_eq!(maker.phase, Phase::Refunded);
     }
 

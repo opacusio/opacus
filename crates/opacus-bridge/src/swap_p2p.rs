@@ -419,12 +419,12 @@ impl SwapNet {
 
     // -- WG-18: deadline enforcement ----------------------------------------
 
-    /// Sessions whose protocol deadline has passed at chain height `now`
+    /// Sessions whose protocol deadline is reached at chain height `now`
     /// (WG-18). Exactly the two refund-eligible states of
     /// [`SwapSession::refund`]:
     ///
     /// * taker, still `Accepted` past the fund window;
-    /// * maker, still `GhostLocked` past the claim window.
+    /// * maker, still `GhostLocked` at or past the claim window.
     ///
     /// Each reported session refunds successfully through
     /// [`SwapSession::refund`], so a sweep that calls `publish_refund`
@@ -453,7 +453,7 @@ impl SwapNet {
                         .both_locked_height
                         .unwrap_or(0)
                         .saturating_add(s.offer.claim_timeout_blocks);
-                    if now > deadline {
+                    if now >= deadline {
                         out.push(ExpiredSwap {
                             offer_id: *id,
                             reason: "claim window expired",
@@ -936,11 +936,11 @@ mod tests {
         let _lock_wire = maker
             .publish_ghost_lock(&id_hex, "ghost-burn-sweep", 120)
             .unwrap();
-        assert!(maker.expired_sessions(320).is_empty());
-        let expired = maker.expired_sessions(321);
+        assert!(maker.expired_sessions(319).is_empty());
+        let expired = maker.expired_sessions(320);
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0].reason, "claim window expired");
-        maker.publish_refund(&id_hex, "sweep test", 321).unwrap();
+        maker.publish_refund(&id_hex, "sweep test", 320).unwrap();
         assert!(maker.expired_sessions(9_999).is_empty());
     }
 

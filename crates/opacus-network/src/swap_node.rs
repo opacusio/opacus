@@ -630,9 +630,9 @@ mod tests {
             .unwrap();
 
         // claim window: both_locked 1060 + 200 -> deadline 1260
-        node.set_height(1260);
+        node.set_height(1259);
         assert!(node.enforce_deadlines().is_empty());
-        node.set_height(1261);
+        node.set_height(1260);
         let swept = node.enforce_deadlines();
         assert_eq!(swept, vec![id.clone()]);
         let net = node.net();
