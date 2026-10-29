@@ -91,9 +91,16 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
 - v4 spend layer (v0.4): fixed-base scalar-mul chip (RC = v*V + r*R and the
   H_leaf*G3 term computed in-circuit as public instances), leaf-v2 note
   commitments, nullifier_v4 linking, and the full V4SpendCircuit - 1-in /
-  2-out topology (MAX_IN = 2, MAX_OUT = 4), balance padding, 15-slot
-  normative instance vector, binding signature, k = 11 at tree depth 2^32 -
-  with a mock-prover self-check and a real IPA prover path.
+  2-out topology (MAX_IN = 2, MAX_OUT = 4), balance padding, 21-slot
+  normative instance vector (15 base + 6-slot WG-26 swap tail), binding
+  signature, k = 11 at tree depth 2^32 - with a mock-prover self-check and
+  a real IPA prover path.
+- In-circuit swap hashlock (WG-26): a spend can lock a note to a Poseidon
+  hashlock H = Poseidon_3(dom_swap, s0, s1) over two 16-byte lanes of the
+  swap preimage - lock derives the swap output leaf, claim reveals the
+  preimage in-circuit and publishes the spent entry, refund skips the
+  preimage check (timeout enforcement is WG-27); plain spends publish a
+  zero swap tail.
 - Real (non-mock) prover/verifier behind the `real-prover` feature: batch
   create_proof and plonk::SingleVerifier verification on
   halo2_proofs 0.3.5 (IPA, zcash lineage).
@@ -111,10 +118,12 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   `build_zk_spend` with single-note selection and change handling,
   `confirm_zk_tx` mirroring consensus, a nullifier seen-set registry, and
   tree introspection helpers.
-- v0.4: `tx_v4.rs` - canonical v4 transaction serialization feeding the
-  exact 15-slot instance vector, `build_zk_spend_v4` and `confirm_zk_tx`
-  mirroring the consensus confirmation order; the wallet end-to-end cycle
-  is green at mainnet tree depth 2^32.
+- v0.4 / WG-26: `tx_v4.rs` - canonical v4/v5 transaction serialization
+  feeding the exact 21-slot instance vector, `build_zk_spend_v5` and
+  `confirm_zk_tx_v5` with `SwapIntent` (Lock / Claim / Refund) mirroring
+  the consensus confirmation order; the wallet end-to-end cycle (including
+  lock-then-claim and lock-then-refund) is green at mainnet tree depth
+  2^32.
 
 ### opacus-consensus (v4 consensus layer)
 
@@ -302,8 +311,13 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   mainnet MAX topology dropped 5103 -> 1551 rows (k = 13 -> 11) and the
   whole cold pipeline (keygen included) runs in 4,81 s with
   steady-state prove at 2,26 s - inside the 10 s budget [S4 8].
-- Hashlock-in-circuit and CLSAG adaptor signatures for on-chain swap
-  enforcement (Refund frames are notices in v0.1).
+- Delivered (WG-26): the swap hashlock tail adds 54 rows
+  (1551 -> 1605, k stays 11) - lock / claim / refund in-circuit [S4 12].
+- Delivered (WG-26): hashlock-in-circuit - swap lock / claim / refund
+  proven inside the v4 spend circuit, public swap tail, v5 wire
+  [S4 12]; chain-level swap enforcement follows in WG-27. CLSAG adaptor
+  signatures for on-chain swap enforcement remain planned (Refund frames
+  are notices in v0.1).
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

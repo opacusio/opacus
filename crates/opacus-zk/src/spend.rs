@@ -1856,9 +1856,6 @@ struct SpendCells {
     rc_in: Vec<Option<(AssignedCell<Fp, Fp>, AssignedCell<Fp, Fp>)>>,
     rc_out: Vec<Option<(AssignedCell<Fp, Fp>, AssignedCell<Fp, Fp>)>>,
     zero_cell: AssignedCell<Fp, Fp>,
-    /// WG-26 [S4 12]: tree entries of the enabled inputs.
-    #[allow(dead_code)] // WG-26 erratum (WP-4): entry cell handles kept but not read
-    e_cells: Vec<Option<AssignedCell<Fp, Fp>>>,
     /// WG-26 [S4 12]: public swap tail cells (instance slots 15..20).
     swap_flag: AssignedCell<Fp, Fp>,
     swap_idx: AssignedCell<Fp, Fp>,
@@ -2362,7 +2359,6 @@ impl<const DEPTH: usize> Circuit<Fp> for V4SpendCircuit<DEPTH> {
                     rc_in,
                     rc_out,
                     zero_cell,
-                    e_cells,
                     swap_flag: swap_cells.flag,
                     swap_idx: idx_cell,
                     swap_h: swap_cells.swap_h,

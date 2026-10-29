@@ -12,6 +12,49 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
 
+### Added
+
+- WG-26 swap hashlock, in-circuit (opacus-zk): a v4 spend can lock a note
+  to a Poseidon hashlock H = Poseidon_3(dom_swap, s0, s1) over two
+  canonical 16-byte lanes of the 32-byte swap preimage. Modes: lock (1)
+  derives the swap_idx-th output leaf with H absorbed; claim (2) proves
+  the preimage in-circuit and publishes the spent note tree entry;
+  refund (3) mirrors claim without the preimage check (the timeout itself
+  becomes a consensus check in WG-27). Plain spends publish a zero swap
+  tail; a swap-locked note is unspendable as a plain note (membership
+  fails).
+- WG-26 swap tail, normative: the public instance vector grows from 15 to
+  21 slots - flag (0 plain / 1 lock / 2 claim / 3 refund, range-
+  constrained in-circuit), swap_idx, H, s0, s1, spent_swap_entry. The
+  normative text now lives in the v0.4 spec as Section 12; the frozen v1
+  definition stays docs/WG-26-swap-hashlock-scope.md 3.3.
+- WG-26 wire (opacus-wallet): TX_VERSION_V5 = the complete v4 layout plus
+  a mandatory 130-byte tail (flag u8, swap_idx u8, H 32B, s0 32B, s1 32B,
+  entry 32B) with strict per-mode canonical rules; sighash_v5 covers
+  every tail field; v4 parsers reject v5 bytes (no trailing-byte
+  ambiguity). Wallet surface: SwapIntent (Lock / Claim / Refund),
+  build_zk_spend_v5, confirm_zk_tx_v5.
+
+### Changed
+
+- **BREAKING (testnet proofs)**: the 21-slot instance layout invalidates
+  existing halo2 proofs on testnet (the instance column length is bound
+  by the protocol). Pre-mainnet only; no migration path.
+- Row budget erratum: the WG-26 scope freeze projected +140..160 rows
+  (output-side continuation perms included); the delivered circuit needs
+  only +54 (per-input swap continuation + select rows, one public swap
+  row, one claim-preimage perm) - 1551 -> 1605 rows at the full MAX
+  topology, required_k() stays 11 (2048 rows) behind a unit-test gate.
+  The spec cost-budget paragraph and the phase table now carry the
+  delivered numbers (k = 11) instead of the stale pre-PROVER-10S
+  estimates (k = 13).
+- WP-4 erratum (opacus-zk): the deliberately kept but never read
+  SpendCells.e_cells field is removed - the synthesize-local entry
+  handles were always the live ones. No behavior change.
+- WP-4 erratum (opacus-wallet): the tx_v4 module doc now points at the
+  21-slot layout (15 base + WG-26 swap tail) instead of the stale
+  15-slot wording.
+
 ## [0.8.0] - 2026-10-28
 
 ### Added

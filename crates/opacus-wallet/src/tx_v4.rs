@@ -18,8 +18,10 @@
 //! over tree entries; the delivered `sighash_v4` takes the root as a curve
 //! point. The single bridge is `opacus_zk::v4_prover::acc_root_point`,
 //! i.e. `[root] * G` over the system base point. Instance reconstruction
-//! goes through `opacus_zk::v4_prover::spend_instances` - the ONE normative
-//! 15-slot layout [S4 8], shared by builder and confirmer.
+//! goes through `opacus_zk::v4_prover::spend_instances` /
+//! `spend_instances_with_swap` - the normative 21-slot layout (15 base
+//! slots [S4 8] + the 6-slot WG-26 swap tail [S4 12]), shared by builder
+//! and confirmer.
 //!
 //! Note transport: `enc_notes` are opaque per-output payloads [S4 7]; the
 //! first cut ships them empty (length slots + caps only). Dedicated note
