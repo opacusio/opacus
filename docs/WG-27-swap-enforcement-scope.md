@@ -1,6 +1,7 @@
 # WG-27 -- Chain-level swap enforcement (claim/refund as consensus checks)
 
-Status : DRAFT v3 (frozen by the WP-1 commit; after that -- fix-forward only)
+Status : DRAFT v3 (frozen by the WP-1 commit; after that -- fix-forward only;
+         O1/O2 pinned by WP-2, section 9)
 Drafted: 2026-10-29, at HEAD b9417acbb058d86a507fe14c39f0baa28a8eae13 (WG-26 WP-4)
          v3 = v2 + precision upgrades from the scope v2 probe audit; no rule
          changes (R1-R5 keep their meaning).
@@ -186,6 +187,24 @@ Verified by probes at b9417ac:
 
 Open points, pinned before WP-2 lands:
 
-    O1  Carrier of W_claim: LOCK tail field vs ConsensusParams default.
-    O2  Consensus-state representation of terminalization: per-swap-id
-        set in ConsensusState and its memory bound.
+    O1  RESOLVED (WP-2): W_claim is the ConsensusParams field
+        claim_timeout_blocks (testnet default 200 = the bridge service
+        convention [A2]). The tail carrier is impossible without
+        breaking section 6 ("zero changes to tail length"): the WG-26
+        tail is frozen at 130 bytes and the lock tail carries only H
+        (tx_v4.rs check_swap_tail). A per-swap window would need a wire
+        change and is rejected with it.
+    O2  RESOLVED (WP-2): ConsensusState gains the swap lock registry
+        swaps: BTreeMap<[u8; 32], u64> (swap id = the 32-byte tail
+        hashlock H, nullifier encoding -> H_lock). LOCK inserts;
+        CLAIM/REFUND terminalization REMOVES [R3]. No terminated-set is
+        kept: the permanent nullifier seen-set already makes the
+        terminalized swap entry unspendable, and a retained
+        terminated-set would wrongly reject an honest re-LOCK of the
+        same H. Memory bound: one entry per OPEN swap - the same growth
+        class as the existing nullifier seen-set; nothing new is
+        unbounded. Also pinned: consensus gains the normative v5 accept
+        path in accept_transaction (TxV5 parse + confirm_v5_consensus)
+        as the carrier for R1-R4 - the P1/P2 accept cases are
+        unreachable without it, because pre-WP-2 consensus rejects
+        every v5 payload at the version gate.
