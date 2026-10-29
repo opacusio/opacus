@@ -38,7 +38,9 @@
 use std::collections::{BTreeMap, HashSet};
 
 use borsh::BorshDeserialize;
-use opacus_wallet::tx_v4::{TxV4, TxV4Error, TxV5, FEE_FLOOR_TESTNET, TX_VERSION_V4, TX_VERSION_V5};
+use opacus_wallet::tx_v4::{
+    TxV4, TxV4Error, TxV5, FEE_FLOOR_TESTNET, TX_VERSION_V4, TX_VERSION_V5,
+};
 use opacus_wallet::zk_spend::{fp_to_bytes, TreeState};
 use opacus_zk::prelude::*;
 use opacus_zk::spend::{binding_vk, tree_rep, verify_bind};
@@ -556,7 +558,10 @@ pub fn confirm_v5_consensus<const DEPTH: usize>(
                 .ok_or(Reject::SwapUnknown { got: swap_id })?;
             let t = lock_height.saturating_add(params.claim_timeout_blocks);
             if height >= t {
-                return Err(Reject::SwapClaimLate { height, deadline: t });
+                return Err(Reject::SwapClaimLate {
+                    height,
+                    deadline: t,
+                });
             }
         }
         // REFUND: valid from height == T on [R2, inclusive].
@@ -567,7 +572,10 @@ pub fn confirm_v5_consensus<const DEPTH: usize>(
                 .ok_or(Reject::SwapUnknown { got: swap_id })?;
             let t = lock_height.saturating_add(params.claim_timeout_blocks);
             if height < t {
-                return Err(Reject::SwapRefundEarly { height, deadline: t });
+                return Err(Reject::SwapRefundEarly {
+                    height,
+                    deadline: t,
+                });
             }
         }
         // Plain (flag 0): the zero tail was enforced by the parse.
@@ -601,7 +609,9 @@ pub fn confirm_v5_consensus<const DEPTH: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use opacus_wallet::tx_v4::{build_zk_spend_v4, build_zk_spend_v5, SpendPlanV4, SwapIntent, WalletNoteV4};
+    use opacus_wallet::tx_v4::{
+        build_zk_spend_v4, build_zk_spend_v5, SpendPlanV4, SwapIntent, WalletNoteV4,
+    };
     use opacus_zk::v4::hashlock_swap;
 
     const ACT: u64 = 100;
@@ -880,7 +890,10 @@ mod tests {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![WalletNoteV4::random(460)],
             fee: 40,
-            swap: Some(SwapIntent::Claim { idx: 1, preimage: *preimage }),
+            swap: Some(SwapIntent::Claim {
+                idx: 1,
+                preimage: *preimage,
+            }),
         };
         build_zk_spend_v5::<DEPTH>(tree, &plan)
             .expect("claim builds")
@@ -889,12 +902,7 @@ mod tests {
 
     /// REFUND wire: spends the locked swap entry at locked_idx back
     /// under the lock hashlock h, empty lanes, 460 out + 40 fee.
-    fn refund_wire(
-        tree: &TreeState,
-        locked: &WalletNoteV4,
-        locked_idx: usize,
-        h: Fp,
-    ) -> Vec<u8> {
+    fn refund_wire(tree: &TreeState, locked: &WalletNoteV4, locked_idx: usize, h: Fp) -> Vec<u8> {
         let plan = SpendPlanV4 {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![WalletNoteV4::random(460)],
@@ -984,7 +992,10 @@ mod tests {
         let wire = refund_wire(st.tree(), &locked, 1, h);
         let err = accept_transaction::<DEPTH>(&params(), ACT + W_CLAIM - 50, &wire, &mut st)
             .expect_err("refund before T must be rejected");
-        assert!(matches!(err, Reject::SwapRefundEarly { .. }), "got: {err:?}");
+        assert!(
+            matches!(err, Reject::SwapRefundEarly { .. }),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -1084,7 +1095,7 @@ mod tests {
             0,
             &WalletNoteV4::random(500),
             &WalletNoteV4::random(450),
-            h
+            h,
         );
         accept_transaction::<DEPTH>(&params(), ACT, &w1, &mut st).expect("first lock ok");
         // After the lock the frontier is [f1, f2, l1, c1]: f2 stays at 1.
@@ -1094,7 +1105,7 @@ mod tests {
             1,
             &WalletNoteV4::random(500),
             &WalletNoteV4::random(450),
-            h
+            h,
         );
         let err = accept_transaction::<DEPTH>(&params(), ACT + 1, &w2, &mut st)
             .expect_err("duplicate swap id lock must be rejected");
@@ -1147,8 +1158,8 @@ mod tests {
         let wire = build_zk_spend_v5::<DEPTH>(st.tree(), &plan)
             .expect("plain v5 builds")
             .to_bytes();
-        let acc = accept_transaction::<DEPTH>(&params(), ACT, &wire, &mut st)
-            .expect("plain v5 accepted");
+        let acc =
+            accept_transaction::<DEPTH>(&params(), ACT, &wire, &mut st).expect("plain v5 accepted");
         assert!(matches!(acc, Accept::V5(_)));
         assert_eq!(st.open_swaps(), 0, "no swap effects");
     }
