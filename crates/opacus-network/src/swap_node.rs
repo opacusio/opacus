@@ -1022,15 +1022,22 @@ mod tests {
         assert_eq!(t.ghost_tx_ref.as_deref(), Some("ghost-burn-e2e"));
         assert_eq!(t.session.phase, Phase::GhostLocked);
 
-        // both directions actually saw traffic
-        assert!(maker
-            .events()
-            .iter()
-            .any(|e| matches!(e, NodeEvent::Received(ref k) if k == "Claim")));
-        assert!(taker
-            .events()
-            .iter()
-            .any(|e| matches!(e, NodeEvent::Replied(ref k) if k == "Claim")));
+        // both directions actually saw traffic. Replied is logged right
+        // AFTER the frame hits the socket (conn_loop writes, then logs),
+        // so it can lag the peer's Received by one scheduling slice:
+        // poll instead of bare assert (CI #84 flake).
+        wait_until(10, || {
+            maker
+                .events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::Received(ref k) if k == "Claim"))
+        });
+        wait_until(10, || {
+            taker
+                .events()
+                .iter()
+                .any(|e| matches!(e, NodeEvent::Replied(ref k) if k == "Claim"))
+        });
     }
 
     /// Net-2: a NEW Offer arriving while the registry is at max_sessions
