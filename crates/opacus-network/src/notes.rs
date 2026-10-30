@@ -33,8 +33,9 @@
 //!    epk || pr || shared || nonce)` and the same material through the
 //!    "opacus-note-v1 mac" context gives `k_mac`;
 //! 4. ciphertext = payload XOR keystream, where the keystream is built
-//!    from `blake3::keyed_hash(k_enc, KS_TAG || nonce || le64(counter))`
-//!    blocks;
+//!    from `blake3::keyed_hash(k_enc, ks_tag || nonce || le64(counter))`
+//!    blocks; the ks/id/mac domain tags live in opacus_crypto::ecies
+//!    (N3_NOTE_TAGS; WG-29 WP-B extraction, D5) - byte-identical wire.
 //! 5. MAC = keyed blake3 over (version, epk, nonce, ciphertext) - NOT
 //!    hops, so a relay can decrement the budget without the key -
 //!    verified BEFORE any decryption; the comparison goes through
@@ -58,6 +59,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::handshake::HandshakeError;
 use crate::identity::NodeIdentity;
+use opacus_crypto::ecies;
+// WG-29 WP-B (D5): the ECIES algebra (session keys, keystream, MAC, id
+// digest) now lives in opacus_crypto::ecies, called with the N3 tags of
+// ecies::N3_NOTE_TAGS; every derived byte is identical, so the N3 wire
+// format is unchanged (the legacy tag constants moved with it).
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -75,12 +81,9 @@ pub const NOTES_MAX_HOPS: u32 = 4;
 /// Bounded note inbox size (blobs kept per node, also the dedupe window).
 pub const NOTE_INBOX_CAP: usize = 1024;
 
-/// Domain tag of the public blob id digest.
-const NOTE_ID_TAG: &[u8] = b"opacus-note-id-v1";
-/// Domain tag of the keystream blocks.
-const KS_TAG: &[u8] = b"opacus-note-ks-v1";
-/// Domain tag of the blob MAC.
-const MAC_TAG: &[u8] = b"opacus-note-mac-v1";
+// N3 domain tags (id / keystream block / MAC) moved to
+// opacus_crypto::ecies::N3_NOTE_TAGS (WG-29 WP-B extraction, D5): same
+// bytes, same wire - see the note next to the use statements above.
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -205,14 +208,7 @@ fn payload_bytes(b: &NoteBlob) -> Result<Vec<u8>, NoteError> {
 /// The PUBLIC blob id: blake3 over (tag, version, hops, epk, nonce, ct).
 /// Relays verify and dedupe on it without any secret material.
 fn id_digest(version: u32, hops: u32, epk: &[u8; 32], nonce: &[u8; 16], ct: &[u8]) -> [u8; 32] {
-    let mut h = blake3::Hasher::new();
-    h.update(NOTE_ID_TAG);
-    h.update(&version.to_le_bytes());
-    h.update(&hops.to_le_bytes());
-    h.update(epk);
-    h.update(nonce);
-    h.update(ct);
-    *h.finalize().as_bytes()
+    ecies::id_digest(&ecies::N3_NOTE_TAGS, version, hops, epk, nonce, ct)
 }
 
 /// Recompute the public id of a blob (relay/test helper).
@@ -236,44 +232,20 @@ fn session_keys(
     shared: &[u8; 32],
     nonce: &[u8; 16],
 ) -> ([u8; 32], [u8; 32]) {
-    let mut mat = Vec::with_capacity(32 + 32 + 32 + 16);
-    mat.extend_from_slice(epk);
-    mat.extend_from_slice(pr);
-    mat.extend_from_slice(shared);
-    mat.extend_from_slice(nonce);
-    let k_enc = blake3::derive_key("opacus-note-v1 keystream", &mat);
-    let k_mac = blake3::derive_key("opacus-note-v1 mac", &mat);
-    (k_enc, k_mac)
+    ecies::session_keys(&ecies::N3_NOTE_TAGS, epk, pr, shared, nonce)
 }
 
-/// blake3 keyed-hash counter-mode keystream (KS_TAG || nonce || le64(i)).
+/// blake3 keyed-hash counter-mode keystream over the N3 tags
+/// (delegates to opacus_crypto::ecies::keystream; bytes unchanged).
 fn keystream(k_enc: &[u8; 32], nonce: &[u8; 16], len: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(len + 32);
-    let mut ctr: u64 = 0;
-    while out.len() < len {
-        let mut input = Vec::with_capacity(KS_TAG.len() + 16 + 8);
-        input.extend_from_slice(KS_TAG);
-        input.extend_from_slice(nonce);
-        input.extend_from_slice(&ctr.to_le_bytes());
-        let block = blake3::keyed_hash(k_enc, &input);
-        out.extend_from_slice(block.as_bytes());
-        ctr += 1;
-    }
-    out.truncate(len);
-    out
+    ecies::keystream(&ecies::N3_NOTE_TAGS, k_enc, nonce, len)
 }
 
 /// Encrypt-then-MAC tag over (version, epk, nonce, ct) - deliberately
 /// not hops: a relay must be able to decrement the budget without
 /// knowing any key material.
 fn mac_of(k_mac: &[u8; 32], version: u32, epk: &[u8; 32], nonce: &[u8; 16], ct: &[u8]) -> [u8; 32] {
-    let mut h = blake3::Hasher::new_keyed(k_mac);
-    h.update(MAC_TAG);
-    h.update(&version.to_le_bytes());
-    h.update(epk);
-    h.update(nonce);
-    h.update(ct);
-    *h.finalize().as_bytes()
+    ecies::mac_of(&ecies::N3_NOTE_TAGS, k_mac, version, epk, nonce, ct)
 }
 
 // ---------------------------------------------------------------------------

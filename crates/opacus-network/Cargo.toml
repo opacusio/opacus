@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+opacus-crypto = { path = "../opacus-crypto" }
 curve25519-dalek.workspace = true
 blake3.workspace = true
 rand.workspace = true

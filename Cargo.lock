@@ -1028,6 +1028,7 @@ dependencies = [
  "curve25519-dalek",
  "hex",
  "opacus-bridge",
+ "opacus-crypto",
  "rand",
  "serde",
  "serde_json",
