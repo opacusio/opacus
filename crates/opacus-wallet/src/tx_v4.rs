@@ -30,6 +30,13 @@
 //! output would publish value-bearing bytes outside the signature.
 //! Plaintext payloads are never built here - that would leak amounts and
 //! keys.
+//!
+//! Scan path (WG-29 WP-D, D2): after a v5 tx is FULLY confirmed
+//! ([`confirm_zk_tx_v5`]), the recipient opens every enc_note with the
+//! local note secret, rebuilds the note, and accepts it only when the
+//! recomputed leaf point equals the published `leaves[j]` - a
+//! substituted payload cannot match a sighash-covered commitment. A
+//! locked output binds against its swap-variant leaf [S4 12 3.1].
 
 use opacus_crypto::{open_enote, seal_enote, CompressedRistretto, EnoteV1, NoteSecret};
 use opacus_zk::prelude::*;
@@ -1220,6 +1227,95 @@ impl TxV4 {
             .ok_or_else(|| TxV4Error::EncNote(format!("no enc_note at index {idx}")))?;
         open_enote(blob, sk).map_err(|e| TxV4Error::EncNote(format!("open output {idx}: {e}")))
     }
+
+    /// WG-29 WP-D: scan a CONFIRMED transaction for the notes addressed
+    /// to `sk`. Outputs sealed to other keys fail their MAC and are
+    /// skipped (opaque to us, never an error); every note that opens is
+    /// leaf-bound (D2) before it is returned. The v4 wire ships its
+    /// enc_notes empty, so a v4 build scans to an empty set - the
+    /// sealed path is [`TxV5::scan_notes`]. Insert the result into the
+    /// note set only after the full confirmation ([`confirm_zk_tx`])
+    /// has passed.
+    pub fn scan_notes(&self, sk: &NoteSecret) -> Vec<WalletNoteV4> {
+        let mut found = Vec::new();
+        for (j, blob) in self.enc_notes.iter().enumerate() {
+            if blob.is_empty() || j >= self.leaves.len() {
+                continue;
+            }
+            let enote = match open_enote(blob, sk) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if let Ok(note) = WalletNoteV4::from_enote(&enote, &self.leaves[j]) {
+                found.push(note);
+            }
+        }
+        found
+    }
+}
+
+impl WalletNoteV4 {
+    /// WG-29 WP-D (D1/D2): rebuild the wallet note from an opened enote
+    /// and bind it to the published leaf: the recomputed leaf point
+    /// MUST equal `leaf`; otherwise the note is rejected - a
+    /// substituted payload cannot match a sighash-covered commitment.
+    pub fn from_enote(enote: &EnoteV1, leaf: &pallas::Point) -> Result<Self, TxV4Error> {
+        let note = Self {
+            d: enote.d,
+            a: enote.a,
+            b: enote.b,
+            rho: enote.rho,
+            value: enote.v,
+        };
+        match note.leaf_point() {
+            Some(l) if l == *leaf => Ok(note),
+            _ => Err(TxV4Error::EncNote(
+                "leaf mismatch: note does not bind to the published leaf (D2)".into(),
+            )),
+        }
+    }
+}
+
+impl TxV5 {
+    /// WG-29 WP-D: scan a CONFIRMED v5 transaction for the notes
+    /// addressed to `sk` (the exact inverse of the builder seal, D4).
+    /// The locked output publishes its SWAP-variant leaf [S4 12 3.1],
+    /// so its binding recomputes `swap_leaf_point_v2(.., swap.h)`;
+    /// every other output binds to the plain leaf point. Insert the
+    /// result into the note set only after the full confirmation
+    /// ([`confirm_zk_tx_v5`]) has passed.
+    pub fn scan_notes(&self, sk: &NoteSecret) -> Vec<WalletNoteV4> {
+        let mut found = Vec::new();
+        for (j, blob) in self.base.enc_notes.iter().enumerate() {
+            if blob.is_empty() || j >= self.base.leaves.len() {
+                continue;
+            }
+            let enote = match open_enote(blob, sk) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let cand = WalletNoteV4 {
+                d: enote.d,
+                a: enote.a,
+                b: enote.b,
+                rho: enote.rho,
+                value: enote.v,
+            };
+            // The locked output's published leaf is the swap variant.
+            let locked_here =
+                self.swap.flag == 1 && self.swap.idx != 0 && self.swap.idx as usize == j + 1;
+            let bound = if locked_here {
+                cand.parts()
+                    .map(|(d, a, b, rho)| swap_leaf_point_v2(d, a, b, cand.value, rho, self.swap.h))
+            } else {
+                cand.leaf_point()
+            };
+            if bound == Some(self.base.leaves[j]) {
+                found.push(cand);
+            }
+        }
+        found
+    }
 }
 
 #[cfg(test)]
@@ -1913,5 +2009,120 @@ mod tests {
             build_zk_spend_v5::<4>(&tree, &plan),
             Err(TxV4Error::Topology(_))
         ));
+    }
+
+    // -------------------------------------------------------------------
+    // WG-29 WP-D [D2]: the scan path - recover notes from CONFIRMED v5
+    // tx bytes alone (N3 off), leaf-bound before insertion.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn scan_recovers_notes_from_confirmed_v5_bytes() {
+        const DEPTH: usize = 4;
+        let (mut tree, notes, idxs) = fixture_tree(DEPTH, 3);
+        // The sender (key seed 1) pays 250 atoms to the recipient (seed
+        // 2); the change (702) is sealed to the sender's own key.
+        let change = WalletNoteV4::random(702);
+        let recipient = WalletNoteV4::random(250);
+        let plan = SpendPlanV4 {
+            inputs: vec![(notes[2].clone(), idxs[2])],
+            outputs: vec![change.clone(), recipient.clone()],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
+            fee: 50,
+            swap: None,
+        };
+        let tx = build_zk_spend_v5::<DEPTH>(&tree, &plan).expect("plain v5 builds");
+        let mut seen = HashSet::new();
+        confirm_zk_tx_v5::<DEPTH>(&tx, &mut tree, &mut seen, FEE_FLOOR_TESTNET)
+            .expect("tx confirms BEFORE the scan");
+
+        // N3 off: the recipient sees ONLY the raw tx bytes.
+        let bytes = tx.to_bytes();
+        let parsed = TxV5::from_bytes(&bytes).expect("recipient parses the wire");
+        let got = parsed.scan_notes(&enc_sk(2));
+        assert_eq!(got.len(), 1, "only the addressed output opens");
+        assert_eq!(got[0].d, recipient.d);
+        assert_eq!(got[0].a, recipient.a);
+        assert_eq!(got[0].b, recipient.b);
+        assert_eq!(got[0].rho, recipient.rho);
+        assert_eq!(got[0].value, recipient.value);
+        // D2: the recovered note re-derives the published leaf exactly.
+        assert_eq!(Some(parsed.base.leaves[1]), got[0].leaf_point());
+        // The sender scans back the change note.
+        let change_back = parsed.scan_notes(&enc_sk(1));
+        assert_eq!(change_back.len(), 1);
+        assert_eq!(change_back[0].value, change.value);
+        // A third party recovers nothing (MAC rejects every slot).
+        assert!(parsed.scan_notes(&enc_sk(9)).is_empty());
+        // The recovered note anchors in the confirmed frontier.
+        assert_eq!(
+            tree.leaf(tree.len() - 1),
+            Some(tree_rep(&got[0].leaf_point().expect("valid note")))
+        );
+    }
+
+    #[test]
+    fn scan_recovers_the_locked_output_via_swap_leaf() {
+        const DEPTH: usize = 4;
+        let preimage = [0x9Eu8; 32];
+        let (h, _, _) = hashlock_swap(&preimage);
+        let (mut tree, notes, idxs) = fixture_tree(DEPTH, 2);
+        let locked = WalletNoteV4::random(500);
+        let change = WalletNoteV4::random(450);
+        let plan = SpendPlanV4 {
+            inputs: vec![(notes[0].clone(), idxs[0])],
+            outputs: vec![locked.clone(), change],
+            enc_pks: vec![enc_pk(2), enc_pk(1)],
+            fee: 50,
+            swap: Some(SwapIntent::Lock { idx: 1, h }),
+        };
+        let tx = build_zk_spend_v5::<DEPTH>(&tree, &plan).expect("lock builds");
+        confirm_zk_tx_v5::<DEPTH>(&tx, &mut tree, &mut HashSet::new(), FEE_FLOOR_TESTNET)
+            .expect("lock confirms");
+        // The locked output publishes its SWAP-variant leaf [S4 12 3.1];
+        // the scan binds the opened enote against that leaf.
+        let parsed = TxV5::from_bytes(&tx.to_bytes()).expect("lock wire parses");
+        let got = parsed.scan_notes(&enc_sk(2));
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].value, locked.value);
+        let (d, a, b, rho) = got[0].parts().expect("valid note");
+        assert_eq!(
+            parsed.base.leaves[0],
+            swap_leaf_point_v2(d, a, b, got[0].value, rho, h)
+        );
+        // The change output stays with the sender's key.
+        assert_eq!(parsed.scan_notes(&enc_sk(1)).len(), 1);
+    }
+
+    #[test]
+    fn scan_skips_empty_and_garbage_slots_and_rejects_leaf_mismatch() {
+        // Hand tx: enc_note[0] = b"demo" (garbage length), enc_note[1] =
+        // empty. Nothing opens, nothing is inserted, nothing panics.
+        let tx = hand_tx();
+        assert!(tx.scan_notes(&enc_sk(1)).is_empty());
+        // D2 hard check: a note opened under the right key but bound to a
+        // foreign leaf is rejected by the helper itself.
+        let enote = EnoteV1 {
+            d: [1u8; 32],
+            a: [2u8; 32],
+            b: [3u8; 32],
+            rho: [4u8; 32],
+            v: 7,
+        };
+        let foreign = pallas::Point::generator() * Fq::from(42);
+        assert!(matches!(
+            WalletNoteV4::from_enote(&enote, &foreign),
+            Err(TxV4Error::EncNote(_))
+        ));
+        // The honest leaf binds.
+        let honest = WalletNoteV4 {
+            d: enote.d,
+            a: enote.a,
+            b: enote.b,
+            rho: enote.rho,
+            value: enote.v,
+        };
+        let leaf = honest.leaf_point().expect("valid note");
+        assert!(WalletNoteV4::from_enote(&enote, &leaf).is_ok());
     }
 }
