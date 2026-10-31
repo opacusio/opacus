@@ -5,7 +5,8 @@ pub mod keys;
 pub mod stealth;
 
 pub use commitment::Commitment;
-pub use ecies::{open_enote, seal_enote, EnoteV1};
+pub use curve25519_dalek::ristretto::CompressedRistretto;
+pub use ecies::{note_keypair_from_seed, open_enote, seal_enote, EnoteError, EnoteV1, NoteSecret};
 pub use keys::SpendingKey;
 pub use stealth::{PublicAddress, RecipientKeys, StealthAddress};
 

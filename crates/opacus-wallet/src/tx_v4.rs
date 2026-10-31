@@ -23,11 +23,15 @@
 //! slots [S4 8] + the 6-slot WG-26 swap tail [S4 12]), shared by builder
 //! and confirmer.
 //!
-//! Note transport: `enc_notes` are opaque per-output payloads [S4 7]; the
-//! first cut ships them empty (length slots + caps only). Dedicated note
-//! encryption is a separate roadmap item, and building plaintext payloads
-//! here would leak amounts and keys - not done.
+//! Note transport (WG-29 WP-C, D4): on the v5 build path `enc_notes` carry
+//! the sealed per-output enote (`opacus_crypto::seal_enote`, fixed 217 B),
+//! covered by the v5 sighash (D6, closes WG-26 R3). The v4 build path still
+//! ships the slots empty: its sighash is the v4 stream, and sealing a v4
+//! output would publish value-bearing bytes outside the signature.
+//! Plaintext payloads are never built here - that would leak amounts and
+//! keys.
 
+use opacus_crypto::{open_enote, seal_enote, CompressedRistretto, EnoteV1, NoteSecret};
 use opacus_zk::prelude::*;
 use opacus_zk::spend::{
     balance_holds, binding_sk, binding_vk, leaf_entry_v2, sighash_v4, sighash_v5, sign_bind,
@@ -166,6 +170,8 @@ pub enum TxV4Error {
     RootMismatch,
     /// Fee below the floor [S4 9 step 7].
     Fee,
+    /// WG-29 WP-C (D4): sealing or opening a sealed output enote failed.
+    EncNote(String),
 }
 
 impl std::fmt::Display for TxV4Error {
@@ -191,6 +197,7 @@ impl std::fmt::Display for TxV4Error {
             TxV4Error::NullifierSeen => write!(f, "nullifier already seen"),
             TxV4Error::RootMismatch => write!(f, "tx root does not match the current frontier"),
             TxV4Error::Fee => write!(f, "fee below the floor"),
+            TxV4Error::EncNote(m) => write!(f, "enc note failure: {m}"),
         }
     }
 }
@@ -215,8 +222,9 @@ pub struct TxV4 {
     pub rc_in: Vec<pallas::Point>,
     /// Output value commitments [S4 4], len = n_out.
     pub rc_out: Vec<pallas::Point>,
-    /// Opaque per-output note payloads [S4 7]; empty in the first cut
-    /// (dedicated encryption is a separate roadmap item).
+    /// Opaque per-output note payloads [S4 7]. WG-29 WP-C (D4): the v5
+    /// builder fills each slot with the sealed D4 enote (217 B); the v4
+    /// builder ships them empty (the v4 sighash does not cover them).
     pub enc_notes: Vec<Vec<u8>>,
     /// Fee in native units.
     pub fee: u64,
@@ -563,8 +571,9 @@ impl TxV5 {
 
     /// Sighash [S4 7, S4 12 3.6]: the v5 stream covers every serialized
     /// field consumed by verification INCLUDING the swap tail; version
-    /// enters as the constant le64(5). enc_notes stay opaque and
-    /// deliberately uncovered, as in v4.
+    /// enters as the constant le64(5). WG-29 WP-C (D6): the sealed
+    /// per-output enotes close the stream (le64-framed), closing the
+    /// WG-26 R3 gap on the v5 wire. The v4 sighash is unchanged.
     pub fn sighash(&self) -> [u8; 32] {
         sighash_v5(
             &acc_root_point(self.base.root),
@@ -574,7 +583,14 @@ impl TxV5 {
             &self.base.rc_out,
             self.base.fee,
             &self.swap,
+            &self.base.enc_notes,
         )
+    }
+
+    /// WG-29 WP-C (D4): open the sealed enote of output `idx` with the
+    /// local note secret (D3) - the exact inverse of the builder seal.
+    pub fn open_enc_note(&self, idx: usize, sk: &NoteSecret) -> Result<EnoteV1, TxV4Error> {
+        self.base.open_enc_note(idx, sk)
     }
 
     /// Canonical wire form [S4 12 3.6]: the v4 body under version 5,
@@ -657,6 +673,11 @@ pub enum SwapIntent {
 pub struct SpendPlanV4 {
     pub inputs: Vec<(WalletNoteV4, usize)>,
     pub outputs: Vec<WalletNoteV4>,
+    /// WG-29 WP-C (D3/D4): the recipient note public key of EVERY output,
+    /// same length as `outputs` (topology-checked before any proving
+    /// work). The v5 builder seals output j into enc_notes[j] to
+    /// enc_pks[j]; the v4 builder validates the length only.
+    pub enc_pks: Vec<CompressedRistretto>,
     pub fee: u64,
     /// WG-26 [S4 12 3.7]: optional swap instruction; `None` is plain.
     pub swap: Option<SwapIntent>,
@@ -709,6 +730,14 @@ pub fn build_zk_spend_v4<const DEPTH: usize>(
     // Validate outputs up front so later expects are total.
     for n in &plan.outputs {
         n.parts().ok_or(TxV4Error::CorruptNote)?;
+    }
+    // WG-29 WP-C (D4): the sealed-enote recipient list must match the
+    // output count exactly, before any proving work.
+    if plan.enc_pks.len() != n_out {
+        return Err(TxV4Error::Topology(format!(
+            "enc_pks len {} != outputs {n_out}",
+            plan.enc_pks.len()
+        )));
     }
 
     // Blinding scalars and host-side RCs [S4 4]; the circuit derives the
@@ -923,6 +952,14 @@ pub fn build_zk_spend_v5<const DEPTH: usize>(
     for n in &plan.outputs {
         n.parts().ok_or(TxV4Error::CorruptNote)?;
     }
+    // WG-29 WP-C (D4): the sealed-enote recipient list must match the
+    // output count exactly, before any proving work.
+    if plan.enc_pks.len() != n_out {
+        return Err(TxV4Error::Topology(format!(
+            "enc_pks len {} != outputs {n_out}",
+            plan.enc_pks.len()
+        )));
+    }
 
     // Blinding scalars and host-side RCs [S4 4], unchanged.
     let r_in: Vec<Fq> = (0..n_in).map(|_| Fq::random(OsRng)).collect();
@@ -987,8 +1024,27 @@ pub fn build_zk_spend_v5<const DEPTH: usize>(
     verify_v4::<DEPTH>(&proof.proof, &instances, n_in, n_out)
         .map_err(|e| TxV4Error::Proof(format!("self-verify: {e}")))?;
 
+    // WG-29 WP-C (D4): seal every output note to its recipient note pk
+    // with fresh randomness per output, BEFORE the sighash - the sealed
+    // blobs close the v5 stream (D6). The 217-byte blob fits both caps
+    // (ENC_NOTE_MAX 1024 tx-side; N3 NOTE_PAYLOAD_MAX 512 for the backup
+    // delivery channel).
+    let mut enc_notes: Vec<Vec<u8>> = Vec::with_capacity(n_out);
+    for (j, n) in plan.outputs.iter().enumerate() {
+        let enote = EnoteV1 {
+            d: n.d,
+            a: n.a,
+            b: n.b,
+            rho: n.rho,
+            v: n.value,
+        };
+        let blob = seal_enote(&enote, &plan.enc_pks[j])
+            .map_err(|e| TxV4Error::EncNote(format!("seal output {j}: {e}")))?;
+        enc_notes.push(blob.to_vec());
+    }
+
     // Sighash and the binding signature [S4 6, S4 12 3.6]: the v5 stream
-    // covers the tail.
+    // covers the tail and the sealed enotes (D6).
     let s = sighash_v5(
         &acc_root_point(root),
         &ns,
@@ -997,6 +1053,7 @@ pub fn build_zk_spend_v5<const DEPTH: usize>(
         &rc_out,
         fee,
         &swap,
+        &enc_notes,
     );
     let bsk = binding_sk(&r_in, &r_out);
     let bvk = binding_vk(&rc_in, &rc_out, fee);
@@ -1010,7 +1067,7 @@ pub fn build_zk_spend_v5<const DEPTH: usize>(
             leaves,
             rc_in,
             rc_out,
-            enc_notes: vec![Vec::new(); n_out],
+            enc_notes,
             fee,
             proof: proof.proof,
             bind_sig,
@@ -1148,9 +1205,27 @@ pub fn confirm_zk_tx_v5<const DEPTH: usize>(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// WG-29 WP-C (D4): the recipient scan path
+// ---------------------------------------------------------------------------
+
+impl TxV4 {
+    /// Open the sealed enote of output `idx` with the local note secret
+    /// (D3/D4): the exact inverse of the builder seal. Fails closed on
+    /// any length, MAC or codec violation ([`TxV4Error::EncNote`]).
+    pub fn open_enc_note(&self, idx: usize, sk: &NoteSecret) -> Result<EnoteV1, TxV4Error> {
+        let blob = self
+            .enc_notes
+            .get(idx)
+            .ok_or_else(|| TxV4Error::EncNote(format!("no enc_note at index {idx}")))?;
+        open_enote(blob, sk).map_err(|e| TxV4Error::EncNote(format!("open output {idx}: {e}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opacus_crypto::note_keypair_from_seed;
     use opacus_zk::spend::SPEND_INSTANCE_SLOTS;
 
     fn fixture_tree(depth: usize, n: usize) -> (TreeState, Vec<WalletNoteV4>, Vec<usize>) {
@@ -1163,6 +1238,16 @@ mod tests {
             idxs.push(tree.append(note.tree_entry().expect("valid note")));
         }
         (tree, notes, idxs)
+    }
+
+    /// WG-29 WP-C: a deterministic recipient note key (D3); the seed byte
+    /// s expands to the 64-byte seed. The secret is for the scan tests.
+    fn enc_sk(s: u8) -> NoteSecret {
+        note_keypair_from_seed(&[s; 64])
+    }
+    /// The matching public key for the plan fixtures.
+    fn enc_pk(s: u8) -> CompressedRistretto {
+        enc_sk(s).public()
     }
 
     /// A hand-assembled, well-formed tx (no proving) for wire/sighash tests.
@@ -1341,6 +1426,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(notes[0].clone(), idxs[0])],
             outputs: vec![WalletNoteV4::random(900), WalletNoteV4::random(150)],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
             fee: 100,
             swap: None,
         };
@@ -1352,6 +1438,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(notes[0].clone(), idxs[0])],
             outputs: vec![WalletNoteV4::random(800), WalletNoteV4::random(100)],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
             fee: 50,
             swap: None,
         };
@@ -1363,6 +1450,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(notes[1].clone(), 99)],
             outputs: vec![WalletNoteV4::random(900), WalletNoteV4::random(100)],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
             fee: 0,
             swap: None,
         };
@@ -1383,6 +1471,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(notes[2].clone(), idxs[2])],
             outputs: vec![change.clone(), recipient.clone()],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
             fee: 50,
             swap: None,
         };
@@ -1456,6 +1545,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(notes[1].clone(), idxs[1])],
             outputs: vec![change.clone(), recipient.clone()],
+            enc_pks: vec![enc_pk(3), enc_pk(4)],
             fee: 50,
             swap: None,
         };
@@ -1610,6 +1700,15 @@ mod tests {
         let mut t = tx.clone();
         t.swap.entry = Fp::from(5u64);
         assert_ne!(t.sighash(), base);
+        // WG-29 WP-C (D6): the sealed enotes close the v5 stream (the
+        // WG-26 R3 gap): any enc_note byte mutation shifts S, and so does
+        // dropping slots entirely.
+        let mut t = tx.clone();
+        t.base.enc_notes[0] = b"x".to_vec();
+        assert_ne!(t.sighash(), base);
+        let mut t = tx.clone();
+        t.base.enc_notes.clear();
+        assert_ne!(t.sighash(), base);
         // Base fields stay covered.
         let mut t = tx.clone();
         t.base.fee += 1;
@@ -1633,6 +1732,7 @@ mod tests {
         let lock_plan = SpendPlanV4 {
             inputs: vec![(notes[0].clone(), idxs[0])],
             outputs: vec![locked.clone(), change],
+            enc_pks: vec![enc_pk(5), enc_pk(6)],
             fee: 50,
             swap: Some(SwapIntent::Lock { idx: 1, h }),
         };
@@ -1672,6 +1772,7 @@ mod tests {
         let claim_plan = SpendPlanV4 {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![claim_out.clone()],
+            enc_pks: vec![enc_pk(7)],
             fee: 40,
             swap: Some(SwapIntent::Claim { idx: 1, preimage }),
         };
@@ -1690,6 +1791,7 @@ mod tests {
         let plain_plan = SpendPlanV4 {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![WalletNoteV4::random(460)],
+            enc_pks: vec![enc_pk(8)],
             fee: 40,
             swap: None,
         };
@@ -1711,6 +1813,7 @@ mod tests {
         let lock_plan = SpendPlanV4 {
             inputs: vec![(notes[0].clone(), idxs[0])],
             outputs: vec![locked.clone(), change],
+            enc_pks: vec![enc_pk(5), enc_pk(6)],
             fee: 50,
             swap: Some(SwapIntent::Lock { idx: 1, h }),
         };
@@ -1724,6 +1827,7 @@ mod tests {
         let refund_plan = SpendPlanV4 {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![refund_out.clone()],
+            enc_pks: vec![enc_pk(7)],
             fee: 40,
             swap: Some(SwapIntent::Refund { idx: 1, h }),
         };
@@ -1744,5 +1848,70 @@ mod tests {
         )
         .expect("refund confirms");
         assert_eq!(Some(refund_tx.base.leaves[0]), refund_out.leaf_point());
+    }
+
+    // -------------------------------------------------------------------
+    // WG-29 WP-C [D4/D6]: sealed enotes ride the v5 wire, covered
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn build_v5_seals_every_output_into_enc_notes() {
+        const DEPTH: usize = 8;
+        let (mut tree, notes, idxs) = fixture_tree(DEPTH, 5);
+        let change = WalletNoteV4::random(702);
+        let recipient = WalletNoteV4::random(250);
+        let plan = SpendPlanV4 {
+            inputs: vec![(notes[2].clone(), idxs[2])],
+            outputs: vec![change.clone(), recipient.clone()],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
+            fee: 50,
+            swap: None,
+        };
+        let tx = build_zk_spend_v5::<DEPTH>(&tree, &plan).expect("plain v5 builds");
+        // Every output carries a fixed-size sealed enote (D4: 217 B).
+        assert_eq!(tx.base.enc_notes.len(), 2);
+        for blob in &tx.base.enc_notes {
+            assert_eq!(blob.len(), opacus_crypto::ecies::ENOTE_BLOB_LEN);
+        }
+        // The recipient recovers the exact note fields (D1).
+        let got = tx.open_enc_note(1, &enc_sk(2)).expect("recipient opens");
+        assert_eq!(got.d, recipient.d);
+        assert_eq!(got.a, recipient.a);
+        assert_eq!(got.b, recipient.b);
+        assert_eq!(got.rho, recipient.rho);
+        assert_eq!(got.v, recipient.value);
+        // The change holder opens slot 0 with its own key.
+        let change_back = tx.open_enc_note(0, &enc_sk(1)).expect("change opens");
+        assert_eq!(change_back.v, change.value);
+        // A foreign key fails closed on the MAC; so does a bad slot.
+        assert!(matches!(
+            tx.open_enc_note(1, &enc_sk(9)),
+            Err(TxV4Error::EncNote(_))
+        ));
+        assert!(matches!(
+            tx.open_enc_note(2, &enc_sk(2)),
+            Err(TxV4Error::EncNote(_))
+        ));
+        // The sealed notes ride the confirm path untouched.
+        let mut seen = HashSet::new();
+        confirm_zk_tx_v5::<DEPTH>(&tx, &mut tree, &mut seen, FEE_FLOOR_TESTNET)
+            .expect("plain v5 with sealed enotes confirms");
+    }
+
+    #[test]
+    fn build_rejects_enc_pks_output_count_mismatch() {
+        let (tree, notes, idxs) = fixture_tree(4, 3);
+        // One pk for two outputs: rejected before any proving work.
+        let plan = SpendPlanV4 {
+            inputs: vec![(notes[0].clone(), idxs[0])],
+            outputs: vec![WalletNoteV4::random(900), WalletNoteV4::random(100)],
+            enc_pks: vec![enc_pk(1)],
+            fee: 0,
+            swap: None,
+        };
+        assert!(matches!(
+            build_zk_spend_v5::<4>(&tree, &plan),
+            Err(TxV4Error::Topology(_))
+        ));
     }
 }

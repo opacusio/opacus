@@ -609,6 +609,7 @@ pub fn confirm_v5_consensus<const DEPTH: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opacus_crypto::{note_keypair_from_seed, CompressedRistretto};
     use opacus_wallet::tx_v4::{
         build_zk_spend_v4, build_zk_spend_v5, SpendPlanV4, SwapIntent, WalletNoteV4,
     };
@@ -620,6 +621,13 @@ mod tests {
     const W_CLAIM: u64 = 200;
     /// The canonical 32-byte preimage of the test swaps.
     const PRE: [u8; 32] = [0x5au8; 32];
+
+    /// WG-29 WP-C: deterministic recipient note pk for the plan fixtures.
+    /// The builder seals every v5 output, so the pks must be valid
+    /// ristretto points; consensus never opens the sealed enotes.
+    fn enc_pk(s: u8) -> CompressedRistretto {
+        note_keypair_from_seed(&[s; 64]).public()
+    }
 
     /// Consensus params with a nonzero activation height so BOTH sides of
     /// the gate are testable, and a zero fee floor unless overridden.
@@ -642,6 +650,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(in_note.clone(), 0)],
             outputs: vec![out1, out2],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
             fee: 5,
             swap: None,
         };
@@ -870,6 +879,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(fund.clone(), fund_idx)],
             outputs: vec![locked.clone(), change.clone()],
+            enc_pks: vec![enc_pk(1), enc_pk(2)],
             fee: 50,
             swap: Some(SwapIntent::Lock { idx: 1, h }),
         };
@@ -889,6 +899,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![WalletNoteV4::random(460)],
+            enc_pks: vec![enc_pk(3)],
             fee: 40,
             swap: Some(SwapIntent::Claim {
                 idx: 1,
@@ -906,6 +917,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(locked.clone(), locked_idx)],
             outputs: vec![WalletNoteV4::random(460)],
+            enc_pks: vec![enc_pk(3)],
             fee: 40,
             swap: Some(SwapIntent::Refund { idx: 1, h }),
         };
@@ -1152,6 +1164,7 @@ mod tests {
         let plan = SpendPlanV4 {
             inputs: vec![(fund, 0)],
             outputs: vec![WalletNoteV4::random(900)],
+            enc_pks: vec![enc_pk(4)],
             fee: 100,
             swap: None,
         };

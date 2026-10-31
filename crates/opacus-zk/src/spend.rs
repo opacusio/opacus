@@ -272,6 +272,16 @@ pub fn sighash_v4(
 /// the four field elements enter as canonical little-endian reprs, like
 /// the nullifiers [S4 7, S4 11]. Plain v5 transactions cover the all-zero
 /// tail, so ONE sighash shape serves every swap mode.
+///
+/// WG-29 WP-C (D6, closes WG-26 R3 for the v5 wire): the stream extends
+/// over the sealed per-output enotes, in output order, each framed as
+/// `le64(len) || enc_note_bytes`; the sealed D4 blob is fixed 217 B and
+/// the framing keeps the stream unambiguous anyway. The blob count equals
+/// `n_out`, which the stream already pins through the leaves.
+// WG-29 WP-C: the v5 stream signs every field in wire order (D6), so
+// the parameter list mirrors the [S4 12 3.6] spec 1:1; grouping the
+// args into a struct would decouple the signature from the spec.
+#[allow(clippy::too_many_arguments)]
 pub fn sighash_v5(
     root: &pallas::Point,
     ns: &[Fp],
@@ -280,6 +290,7 @@ pub fn sighash_v5(
     rc_out: &[pallas::Point],
     fee: u64,
     swap: &SwapPub,
+    enc_notes: &[Vec<u8>],
 ) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
     h.update(b"GHOST/v5/sighash");
@@ -304,6 +315,11 @@ pub fn sighash_v5(
     h.update(swap.s0.to_repr().as_ref());
     h.update(swap.s1.to_repr().as_ref());
     h.update(swap.entry.to_repr().as_ref());
+    // WG-29 WP-C (D6): the sealed enotes close the stream, framed.
+    for e in enc_notes {
+        h.update(&(e.len() as u64).to_le_bytes());
+        h.update(e);
+    }
     let d = h.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(d.as_bytes());
