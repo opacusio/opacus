@@ -611,7 +611,7 @@ mod tests {
     use super::*;
     use opacus_crypto::{note_keypair_from_seed, CompressedRistretto};
     use opacus_wallet::tx_v4::{
-        build_zk_spend_v4, build_zk_spend_v5, SpendPlanV4, SwapIntent, WalletNoteV4,
+        build_zk_spend_v4, build_zk_spend_v5, SpendPlanV4, SwapIntent, TxV5, WalletNoteV4,
     };
     use opacus_zk::v4::hashlock_swap;
 
@@ -1175,5 +1175,77 @@ mod tests {
             accept_transaction::<DEPTH>(&params(), ACT, &wire, &mut st).expect("plain v5 accepted");
         assert!(matches!(acc, Accept::V5(_)));
         assert_eq!(st.open_swaps(), 0, "no swap effects");
+    }
+
+    // ------------------------------------------------------------------
+    // WG-29 WP-E [D6]: confirm_v5_consensus runs on the COVERED sighash -
+    // the sealed per-output enotes close the signed v5 stream. Evidence:
+    // a v5 tx with sealed enc_notes confirms end to end, and any enc_note
+    // tamper or cross-output substitution shifts the sighash while the
+    // circuit stays valid (enc_notes are not circuit instances), so the
+    // binding signature is what rejects [S4 9 steps 3+4]. Consensus never
+    // opens the sealed payloads.
+    // ------------------------------------------------------------------
+
+    /// A funded state + a sealed 2-output v5 wire (3000 in -> 1400 +
+    /// 1590 out + 10 fee), every output sealed to its own note pk.
+    fn sealed_v5_fixture() -> (ConsensusState, Vec<u8>) {
+        let fund = WalletNoteV4::random(3_000);
+        let st = funded_state(std::slice::from_ref(&fund));
+        let plan = SpendPlanV4 {
+            inputs: vec![(fund, 0)],
+            outputs: vec![WalletNoteV4::random(1_400), WalletNoteV4::random(1_590)],
+            enc_pks: vec![enc_pk(5), enc_pk(6)],
+            fee: 10,
+            swap: None,
+        };
+        let wire = build_zk_spend_v5::<DEPTH>(st.tree(), &plan)
+            .expect("sealed v5 builds")
+            .to_bytes();
+        (st, wire)
+    }
+
+    #[test]
+    fn wg29_v5_sealed_enc_notes_confirm_on_the_covered_sighash() {
+        let (mut st, wire) = sealed_v5_fixture();
+        let acc = accept_transaction::<DEPTH>(&params(), ACT, &wire, &mut st)
+            .expect("sealed v5 accepted on the covered sighash");
+        assert!(matches!(acc, Accept::V5(_)));
+        assert_eq!(st.leaf_count(), 3, "1 funded + n_out leaves appended");
+        assert_eq!(st.seen_count(), 1, "n_in nullifiers seen");
+    }
+
+    #[test]
+    fn wg29_v5_enc_note_tamper_breaks_the_covered_sighash() {
+        // Flip one byte INSIDE a sealed enote: the parse still succeeds
+        // (the blob is opaque), the circuit still verifies, but the
+        // covered sighash shifts - the binding signature must reject.
+        let (mut st, wire) = sealed_v5_fixture();
+        let mut parsed = TxV5::from_bytes(&wire).expect("sealed wire parses");
+        assert_eq!(parsed.base.enc_notes.len(), 2);
+        assert_eq!(parsed.base.enc_notes[0].len(), 217, "D4 blob size");
+        parsed.base.enc_notes[0][0] ^= 0x01;
+        let err = accept_transaction::<DEPTH>(&params(), ACT, &parsed.to_bytes(), &mut st)
+            .expect_err("tampered enc_note must be rejected");
+        assert!(matches!(err, Reject::Balance), "got: {err:?}");
+        assert_eq!(st.leaf_count(), 1, "state untouched on reject");
+    }
+
+    #[test]
+    fn wg29_v5_enc_note_substitution_breaks_the_covered_sighash() {
+        // Cross-output substitution (swap the two sealed blobs): both
+        // blobs stay individually well-formed, but the per-output stream
+        // order is signed, so the sighash shifts and the binding
+        // signature rejects. This is the consensus half of the D2
+        // binding: a substituted note cannot ride an accepted tx.
+        let (mut st, wire) = sealed_v5_fixture();
+        let mut parsed = TxV5::from_bytes(&wire).expect("sealed wire parses");
+        let first = parsed.base.enc_notes[0].clone();
+        parsed.base.enc_notes[0] = parsed.base.enc_notes[1].clone();
+        parsed.base.enc_notes[1] = first;
+        let err = accept_transaction::<DEPTH>(&params(), ACT, &parsed.to_bytes(), &mut st)
+            .expect_err("substituted enc_notes must be rejected");
+        assert!(matches!(err, Reject::Balance), "got: {err:?}");
+        assert_eq!(st.leaf_count(), 1, "state untouched on reject");
     }
 }

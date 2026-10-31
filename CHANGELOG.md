@@ -34,6 +34,28 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   every tail field; v4 parsers reject v5 bytes (no trailing-byte
   ambiguity). Wallet surface: SwapIntent (Lock / Claim / Refund),
   build_zk_spend_v5, confirm_zk_tx_v5.
+- WG-29 enc_notes (S4 7): in-transaction note encryption, end to end.
+  The v5 builder seals every output note to the recipient's note key
+  (D3: note_sk = scalar(blake3("ghost_note_derive_v1" || seed)) with a
+  zeroizing wrapper) using the ristretto ECIES extracted to
+  crates/opacus-crypto/src/ecies.rs (D4/D5: ephemeral scalar,
+  blake3 derive_key keystream + keyed MAC, MAC verified before any
+  decryption, WG-29 domain tags). The plaintext ENoteV1 is a fixed
+  137-byte struct (version u8 = 1 || d 32 || a 32 || b 32 || rho 32 ||
+  v u64 LE); the wire blob is epk 32 || nonce 16 || ct 137 || mac 32 =
+  217 B (ENC_NOTE_MAX 1024 / MAX_OUT 4 unchanged, D7). The v5 sighash
+  stream extends over the sealed enotes, framed le64(len) || bytes per
+  output (D6) - this closes the documented WG-26 R3 gap on the v5 wire;
+  the v4 sighash is untouched.
+- WG-29 recovery + consensus evidence: after a v5 transaction is FULLY
+  confirmed, the wallet scan path opens every enc_note with the local
+  note_sk, recomputes the leaf point and requires a tree-leaf match (D2)
+  before the note is inserted; the e2e test recovers notes from raw tx
+  bytes alone in a second wallet (N3 off). Consensus: a v5 tx with
+  sealed enotes confirms on the covered sighash, and any enc_note
+  tamper or cross-output substitution shifts the sighash and is
+  rejected (Balance). Bench smoke: proof bytes (22400) and rows (1605)
+  unchanged.
 
 ### Changed
 

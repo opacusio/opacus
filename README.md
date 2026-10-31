@@ -124,6 +124,11 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   the consensus confirmation order; the wallet end-to-end cycle (including
   lock-then-claim and lock-then-refund) is green at mainnet tree depth
   2^32.
+- WG-29 (S4 7): in-transaction note encryption - `build_zk_spend_v5`
+  seals every output note to the recipient's note key (a ristretto
+  ECIES blob of 217 bytes), the v5 sighash covers the sealed payloads,
+  and the scan path recovers the notes from raw confirmed tx bytes
+  alone.
 
 ### opacus-consensus (v4 consensus layer)
 
@@ -248,7 +253,7 @@ Test status (zero warnings in all crates):
 |-------|-------|
 | opacus-zk | 44 default + 2 real-prover (+1 ignored mainnet-depth mock, k = 12) |
 | opacus-wallet | 14 fast + 2 mainnet-depth end-to-end (ignored by default; run with `cargo test -p opacus-wallet -- --ignored`) |
-| opacus-consensus | 10 (real IPA proofs, depth 8) |
+| opacus-consensus | 26 (real IPA proofs, depth 8) |
 | opacus-crypto | 10 |
 | opacus-node | 15 |
 | opacus-bridge | 67 |
@@ -318,6 +323,11 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   [S4 12]; chain-level swap enforcement follows in WG-27. CLSAG adaptor
   signatures for on-chain swap enforcement remain planned (Refund frames
   are notices in v0.1).
+- Delivered (WG-29): in-transaction note encryption [S4 7] - sealed
+  217-byte enotes ride the v5 wire and the v5 sighash covers them
+  (closing the WG-26 R3 gap); recipients recover notes from raw
+  confirmed tx bytes; consensus evidence + bench smoke (proof bytes
+  and rows unchanged).
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
