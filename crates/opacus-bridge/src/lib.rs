@@ -2,10 +2,15 @@
 
 pub mod adaptor;
 pub mod clsag;
+pub mod clsag_verify;
 pub mod swap;
 
 pub use adaptor::{AdaptorSignature, SwapSecret};
 pub use clsag::{one_time_keys, ClsagAdaptor, OneTimeKeys};
+pub use clsag_verify::{
+    pre_mlsag_hash, verify_clsag, verify_tx, ClsagSig, MoneroTx, ParseError, RingMember,
+    RCT_TYPE_BULLETPROOF_PLUS, RCT_TYPE_CLSAG,
+};
 pub use swap::{SwapEngine, SwapId, SwapState};
 pub use swap_p2p::OfferAdaptor;
 
