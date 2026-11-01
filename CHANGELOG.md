@@ -97,6 +97,22 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   da222bf, 2026-10-28). Future governance items (Opacus Grants funding
   model, decentralized OG/OC voting) will land as GIP documents before
   code.
+- GIP-1, the Opacus Grants (OG) ecosystem funding model (docs-only,
+  `docs/gips/GIP-1-og-funding-model.md`, Status: Draft - RFC window
+  opens on merge): two-stage policy. Stage 0 (now) - CCS-style
+  transparent public accounting, 0% of emission, no on-chain fund.
+  Stage 1 (on-chain grants fund from block_reward) only after explicit
+  conditions (block_reward wired into consensus validation - today it
+  is defined but unused, per the v0.4 "consensus issuance policy" trust
+  boundary; mainnet; audit cycle) and only within hard caps: fixed % of
+  block subsidy only, mandatory sunset height, transparent fund
+  addresses reconstructable from chain data, extension exclusively via
+  coinholder vote (GIP-2); perpetual funds, opaque recipients and
+  retroactive reallocation are MUST NOT. Prior art: ZIP 1014/1015/1016
+  (Founders' Reward -> Canopy -> lockbox -> coinholder voting), Monero
+  CCS, Dash masternode treasury, Decred Politeia. Open questions for
+  the RFC window: Stage 1 percentage, payout cadence, interim
+  custodian, wOPACUS treasury interaction.
 
 ## [0.9.0] - 2026-11-01
 

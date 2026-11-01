@@ -425,6 +425,21 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   v0.3.0..v0.9.0 verified consecutive; v0.8.0 = da222bf, 2026-10-28).
   Future governance work (Opacus Grants funding, decentralized OG/OC
   voting) lands as GIP documents first. docs/gips/GIP-0-gip-process.md.
+- Filed (GIP-1, Status: Draft): the Opacus Grants (OG) ecosystem funding
+  model - docs-only Process GIP, RFC window opens on merge. Verified
+  fact base: block_reward(height) (10_000_000_000 atomic units,
+  halving every 210,000 blocks) is defined but NOT yet wired into
+  consensus validation, so the funding model is chosen BEFORE emission
+  activation - the window Zcash never had. Stage 0 (now): CCS-style
+  transparent public accounting, 0% of emission, no on-chain fund.
+  Stage 1 (on-chain grants fund from block_reward) only after explicit
+  conditions (issuance wired into consensus, mainnet, audit cycle) and
+  only within hard caps: fixed % of block subsidy, mandatory sunset
+  height, transparent fund addresses, extension exclusively by
+  coinholder vote (GIP-2); perpetual funds and opaque recipients are
+  MUST NOT. Lessons: ZIP 1014/1015/1016, Monero CCS, Dash treasury,
+  Decred Politeia. Open questions (%, cadence, interim custodian) go to
+  the RFC. docs/gips/GIP-1-og-funding-model.md.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
