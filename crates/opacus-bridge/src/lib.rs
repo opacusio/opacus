@@ -13,7 +13,8 @@ pub use clsag_verify::{
     RCT_TYPE_BULLETPROOF_PLUS, RCT_TYPE_CLSAG,
 };
 pub use swap::{SwapEngine, SwapId, SwapState};
-pub use swap_p2p::OfferAdaptor;
+pub use swap_p2p::{OfferAdaptor, XmrClaimSidecar};
+pub use xmr_swap::{swap_claim_message, swap_secret, XmrClaimAdaptor};
 
 pub const BRIDGE_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_RELAYER_FEE_BPS: u64 = 100;

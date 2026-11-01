@@ -19,11 +19,24 @@
 //!  Refunded     : either side refunds after its timeout expired
 //! ```
 //!
-//! v0.1 limitation: this module is the protocol state machine + validation.
-//! Enforcing the hashlock inside the Ghost zk circuit (and Monero CLSAG
-//! adaptor signatures) lands with the value accumulator (v0.4).
+//! WG-26 landed the hashlock in-circuit (lock / claim / refund modes of the
+//! v4 spend) and WG-27 made CLAIM / REFUND a deterministic function of chain
+//! state. WG-CLSAG-adaptor-int completes the Monero side: the taker
+//! pre-signs the claim spend of the locked XMR as a monerod-compatible CLSAG
+//! adaptor ([`XmrClaimAdaptor`], on top of
+//! [`crate::clsag_adaptor::sign_adaptor`]) bound to the swap secret
+//! [`swap_secret`] derived from the preimage; the maker completes it with
+//! his own preimage and the result passes the UNMODIFIED monerod-compatible
+//! `verify_clsag` - the Monero-side counterpart of the WG-26 in-circuit
+//! hashlock proof. Normative reference: docs/WG-CLSAG-adaptor-int-scope.md.
 
 use blake3::Hasher;
+use curve25519_dalek::scalar::Scalar;
+
+use crate::clsag_adaptor::{complete, sign_adaptor, verify_adaptor, ClsagAdaptorSig};
+use crate::clsag_verify::{
+    decompress_point, hash_to_p3, hash_to_scalar, verify_clsag, ClsagSig, RingMember,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
@@ -51,6 +64,134 @@ pub enum SwapError {
     NotTimedOut,
     ZeroAmount,
     TimeoutNotPositive,
+    /// WG-CLSAG-adaptor-int: the session has no stored preimage (the
+    /// maker-side claim completion needs his own preimage).
+    MissingPreimage,
+    /// WG-CLSAG-adaptor-int: the Monero-side claim adaptor is invalid
+    /// (structural, verification, preimage binding or monerod acceptance
+    /// failed) or absent where required.
+    XmrClaimInvalid,
+}
+
+// ---------------------------------------------------------------------------
+// WG-CLSAG-adaptor-int: the Monero-side claim adaptor
+// ---------------------------------------------------------------------------
+
+const SWAP_SECRET_TAG: &[u8] = b"ghost-bridge/swap-secret-v1";
+const SWAP_CLAIM_MSG_TAG: &[u8] = b"ghost-swap/xmr-claim-msg-v1";
+
+/// The swap secret `t` bound into the Monero-side claim adaptor:
+/// `hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage)`. Reduced mod
+/// l by the monerod `hash_to_scalar`, so the encoding is always a canonical
+/// scalar (a raw blake3 digest would be non-canonical for ~2.7% of
+/// preimages and `complete` would reject honest completions).
+/// Domain-separated from the hashlock (`ghost-swap-hashlock-v1`) and the
+/// WG-21 offer OTK (`ghost-bridge/offer-otk-v1`).
+pub fn swap_secret(preimage: &[u8; 32]) -> [u8; 32] {
+    let mut buf = SWAP_SECRET_TAG.to_vec();
+    buf.extend_from_slice(preimage);
+    hash_to_scalar(&buf).to_bytes()
+}
+
+/// The bilateral claim-tx binding: the pre-signature is only valid for the
+/// claim of THIS swap (the offer id already binds the full offer payload).
+pub fn swap_claim_message(offer_id: &[u8; 32], hashlock: &[u8; 32]) -> [u8; 32] {
+    let mut h = Hasher::new();
+    h.update(SWAP_CLAIM_MSG_TAG);
+    h.update(offer_id);
+    h.update(hashlock);
+    h.finalize().into()
+}
+
+/// Protocol-level record of the taker's pre-signed Monero claim: the
+/// monerod-compatible CLSAG adaptor plus everything a verifier needs
+/// (ring, key image, Pedersen offset). Bilateral off-chain data; the wire
+/// hex form lives in [`crate::swap_p2p::XmrClaimSidecar`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct XmrClaimAdaptor {
+    /// The CLSAG adaptor (pre-signature section + T / T_h / R_G / R_H / di).
+    pub adaptor: ClsagAdaptorSig,
+    /// The ring (decoys chosen by the taker; ring[di].dest = the locked
+    /// one-time output P = [x]G).
+    pub ring: Vec<RingMember>,
+    /// Key image I = [x]Hp(P) of the claimed output.
+    pub key_image: [u8; 32],
+    /// Pedersen offset C_offset (the commitment structure is caller data,
+    /// exactly as in the WP-B synthetic model).
+    pub c_offset: [u8; 32],
+}
+
+impl XmrClaimAdaptor {
+    /// Taker-side builder: pre-sign the claim spend of the locked one-time
+    /// output (spend key `x`, ring[di].dest = [x]G, blinding difference `z`
+    /// with [mask_di] - [C_offset] = [z]G) bound to the swap secret
+    /// [`swap_secret`]` (preimage)` and the claim message
+    /// [`swap_claim_message`]`(offer_id, hashlock)`. Self-checking: the
+    /// built adaptor must pass `verify_adaptor` before it is returned.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build(
+        spend_key: &[u8; 32],
+        blinding: &[u8; 32],
+        preimage: &[u8; 32],
+        offer_id: &[u8; 32],
+        hashlock: &[u8; 32],
+        ring: Vec<RingMember>,
+        c_offset: [u8; 32],
+        di: usize,
+    ) -> Result<Self, SwapError> {
+        let t = swap_secret(preimage);
+        let message = swap_claim_message(offer_id, hashlock);
+        let adaptor = sign_adaptor(spend_key, blinding, &t, &message, &ring, &c_offset, di)
+            .map_err(|_| SwapError::XmrClaimInvalid)?;
+        let dest = decompress_point(&ring[di].dest).ok_or(SwapError::XmrClaimInvalid)?;
+        let key_image = (Scalar::from_bytes_mod_order(*spend_key)
+            * hash_to_p3(&dest.compress().to_bytes()))
+        .compress()
+        .to_bytes();
+        if !verify_adaptor(&adaptor, &message, &key_image, &ring, &c_offset) {
+            return Err(SwapError::XmrClaimInvalid);
+        }
+        Ok(Self {
+            adaptor,
+            ring,
+            key_image,
+            c_offset,
+        })
+    }
+
+    /// Verify the claim adaptor against THIS swap: the message must be the
+    /// bilateral claim binding and the monerod-compatible adaptor checks
+    /// (challenge chain + L'/R' binding equations) must hold.
+    pub fn verify_for(&self, offer_id: &[u8; 32], hashlock: &[u8; 32]) -> bool {
+        let message = swap_claim_message(offer_id, hashlock);
+        verify_adaptor(
+            &self.adaptor,
+            &message,
+            &self.key_image,
+            &self.ring,
+            &self.c_offset,
+        )
+    }
+
+    /// Maker-side completion with the preimage: `complete` enforces the
+    /// preimage binding ([t]G == T with t = [`swap_secret`]` (preimage)`)
+    /// and the result must pass the UNMODIFIED monerod-compatible
+    /// `verify_clsag` - the acceptance gate. Fail-closed: any failure is
+    /// [`SwapError::XmrClaimInvalid`].
+    pub fn complete_for(
+        &self,
+        preimage: &[u8; 32],
+        offer_id: &[u8; 32],
+        hashlock: &[u8; 32],
+    ) -> Result<ClsagSig, SwapError> {
+        let message = swap_claim_message(offer_id, hashlock);
+        let t = swap_secret(preimage);
+        let full = complete(&self.adaptor, &t).map_err(|_| SwapError::XmrClaimInvalid)?;
+        if !verify_clsag(&message, &full, &self.key_image, &self.ring, &self.c_offset) {
+            return Err(SwapError::XmrClaimInvalid);
+        }
+        Ok(full)
+    }
 }
 
 /// A swap offer, serializable for out-of-band exchange.
@@ -119,6 +260,13 @@ pub struct SwapSession {
     /// Height at which both locks were present.
     pub both_locked_height: Option<u64>,
     pub preimage: Option<[u8; 32]>,
+    /// WG-CLSAG-adaptor-int: the taker's pre-signed Monero claim adaptor
+    /// (taker: attached once the preimage was revealed; maker: recorded
+    /// from the Claim sidecar before completion).
+    pub xmr_claim: Option<XmrClaimAdaptor>,
+    /// WG-CLSAG-adaptor-int: maker-side completed claim signature - the
+    /// ready-to-publish Monero spend, monerod-valid (verify_clsag gate).
+    pub xmr_completed: Option<ClsagSig>,
 }
 
 impl SwapSession {
@@ -132,6 +280,8 @@ impl SwapSession {
             accepted_height: 0,
             both_locked_height: None,
             preimage: None,
+            xmr_claim: None,
+            xmr_completed: None,
         }
     }
 
@@ -144,6 +294,8 @@ impl SwapSession {
             accepted_height: current_height,
             both_locked_height: None,
             preimage: None,
+            xmr_claim: None,
+            xmr_completed: None,
         }
     }
 
@@ -261,11 +413,55 @@ impl SwapSession {
     pub fn revealed_preimage(&self) -> Option<[u8; 32]> {
         self.preimage
     }
+
+    // -- WG-CLSAG-adaptor-int: Monero-side claim adaptor --------------------
+
+    /// Taker: attach the pre-signed Monero claim adaptor. Only meaningful
+    /// after the preimage was revealed (the taker needs it to derive the
+    /// swap secret the adaptor is bound to), i.e. in `GhostLocked`, before
+    /// the claim is published.
+    pub fn attach_xmr_claim(&mut self, claim: XmrClaimAdaptor) -> Result<(), SwapError> {
+        if self.role != Role::Taker {
+            return Err(SwapError::WrongRole);
+        }
+        if self.phase != Phase::GhostLocked {
+            return Err(SwapError::WrongPhase);
+        }
+        self.xmr_claim = Some(claim);
+        Ok(())
+    }
+
+    /// Maker: complete the taker's recorded claim adaptor with THIS
+    /// session's own preimage (fail-closed: verification, preimage binding
+    /// and the monerod acceptance gate must all pass) and store the
+    /// completed signature. Any failure leaves the session untouched.
+    pub fn complete_xmr_claim(&mut self, offer_id: &[u8; 32]) -> Result<ClsagSig, SwapError> {
+        if self.role != Role::Maker {
+            return Err(SwapError::WrongRole);
+        }
+        if self.phase != Phase::GhostLocked {
+            return Err(SwapError::WrongPhase);
+        }
+        let preimage = self.preimage.ok_or(SwapError::MissingPreimage)?;
+        let full = {
+            let claim = self.xmr_claim.as_ref().ok_or(SwapError::XmrClaimInvalid)?;
+            claim.complete_for(&preimage, offer_id, &self.offer.hashlock)?
+        };
+        self.xmr_completed = Some(full.clone());
+        Ok(full)
+    }
+
+    /// The completed, monerod-valid claim signature (maker side, after
+    /// [`Self::complete_xmr_claim`]).
+    pub fn completed_xmr_claim(&self) -> Option<&ClsagSig> {
+        self.xmr_completed.as_ref()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as B;
 
     fn offer() -> Offer {
         Offer::new(
@@ -389,5 +585,227 @@ mod tests {
     fn hashlock_is_deterministic_and_binding() {
         assert_eq!(hashlock_of(&[1u8; 32]), hashlock_of(&[1u8; 32]));
         assert_ne!(hashlock_of(&[1u8; 32]), hashlock_of(&[2u8; 32]));
+    }
+
+    // -- WG-CLSAG-adaptor-int -----------------------------------------------
+
+    #[test]
+    fn swap_secret_is_deterministic_canonical_and_domain_separated() {
+        assert_eq!(swap_secret(&[7u8; 32]), swap_secret(&[7u8; 32]));
+        assert_ne!(swap_secret(&[7u8; 32]), swap_secret(&[8u8; 32]));
+        // always canonical: hash_to_scalar reduces mod l
+        for i in 0..64u64 {
+            let mut pre = [0u8; 32];
+            pre[..8].copy_from_slice(&i.to_le_bytes());
+            pre[31] = 0xff; // exercise the high bits
+            assert!(
+                crate::clsag_verify::canonical_scalar(&swap_secret(&pre)).is_some(),
+                "swap_secret must be canonical"
+            );
+        }
+        // domain separation from the hashlock derivation
+        assert_ne!(swap_secret(&[9u8; 32]), hashlock_of(&[9u8; 32]));
+    }
+
+    #[test]
+    fn swap_claim_message_is_deterministic_and_binding() {
+        let a = swap_claim_message(&[1u8; 32], &[2u8; 32]);
+        assert_eq!(a, swap_claim_message(&[1u8; 32], &[2u8; 32]));
+        assert_ne!(a, swap_claim_message(&[3u8; 32], &[2u8; 32]));
+        assert_ne!(a, swap_claim_message(&[1u8; 32], &[4u8; 32]));
+    }
+
+    /// (ring, x, z, c_offset): decoys are prime-order points, the real
+    /// member's mask satisfies [mask_di] - [C_offset] = [z]G.
+    fn synthetic_ring(
+        n: usize,
+        di: usize,
+        tag: &[u8],
+    ) -> (Vec<RingMember>, [u8; 32], [u8; 32], [u8; 32]) {
+        let nz = |parts: &[&[u8]]| -> [u8; 32] {
+            let mut buf = tag.to_vec();
+            for p in parts {
+                buf.extend_from_slice(p);
+            }
+            hash_to_scalar(&buf).to_bytes()
+        };
+        let x = nz(&[b"x"]);
+        let z = nz(&[b"z"]);
+        let k = nz(&[b"k"]);
+        let x_s = Scalar::from_bytes_mod_order(x);
+        let z_s = Scalar::from_bytes_mod_order(z);
+        let k_s = Scalar::from_bytes_mod_order(k);
+        let c_offset = (k_s * B).compress().to_bytes();
+        let mut ring = Vec::with_capacity(n);
+        for i in 0..n {
+            if i == di {
+                ring.push(RingMember {
+                    dest: (x_s * B).compress().to_bytes(),
+                    mask: ((k_s + z_s) * B).compress().to_bytes(),
+                });
+            } else {
+                let r = Scalar::from_bytes_mod_order(nz(&[b"dest", &(i as u64).to_le_bytes()]));
+                let q = Scalar::from_bytes_mod_order(nz(&[b"mask", &(i as u64).to_le_bytes()]));
+                ring.push(RingMember {
+                    dest: (r * B).compress().to_bytes(),
+                    mask: (q * B).compress().to_bytes(),
+                });
+            }
+        }
+        (ring, x, z, c_offset)
+    }
+
+    fn offer_for(preimage: &[u8; 32]) -> Offer {
+        Offer::new(
+            2_000_000_000_000,
+            1_000_000_000,
+            100,
+            200,
+            "ghost-maker-addr",
+            "xmr-taker-addr",
+            preimage,
+        )
+        .unwrap()
+    }
+
+    /// Maker-side completion: honest build -> record -> complete -> the
+    /// stored signature is monerod-valid (acceptance gate).
+    #[test]
+    fn xmr_claim_state_machine_honest_completion() {
+        let preimage = [42u8; 32];
+        let offer_id = [5u8; 32];
+        let (ring, x, z, c_offset) = synthetic_ring(8, 3, b"int-p1");
+        let claim = XmrClaimAdaptor::build(
+            &x,
+            &z,
+            &preimage,
+            &offer_id,
+            &offer_for(&preimage).hashlock,
+            ring,
+            c_offset,
+            3,
+        )
+        .unwrap();
+        assert!(claim.verify_for(&offer_id, &offer_for(&preimage).hashlock));
+
+        // taker side: attach only in GhostLocked
+        let mut taker = SwapSession::accept(offer_for(&preimage), 100);
+        assert_eq!(
+            taker.attach_xmr_claim(claim.clone()),
+            Err(SwapError::WrongPhase)
+        );
+        taker.lock_xmr(110).unwrap();
+        taker.mark_ghost_locked(120).unwrap();
+        taker.attach_xmr_claim(claim.clone()).unwrap();
+
+        // maker side: full progression, then completion with his own preimage
+        let mut maker = SwapSession::make_offer(offer_for(&preimage), 100);
+        maker.set_preimage(preimage).unwrap();
+        maker.mark_xmr_locked(110).unwrap();
+        assert_eq!(
+            maker.complete_xmr_claim(&offer_id),
+            Err(SwapError::WrongPhase)
+        );
+        maker.mark_ghost_locked(120).unwrap();
+        // no adaptor recorded yet -> invalid
+        assert_eq!(
+            maker.complete_xmr_claim(&offer_id),
+            Err(SwapError::XmrClaimInvalid)
+        );
+        maker.xmr_claim = Some(claim.clone());
+        let full = maker.complete_xmr_claim(&offer_id).unwrap();
+        assert!(maker.completed_xmr_claim().is_some());
+        // the stored signature passes the UNMODIFIED monerod verifier
+        let message = swap_claim_message(&offer_id, &offer_for(&preimage).hashlock);
+        assert!(verify_clsag(
+            &message,
+            &full,
+            &claim.key_image,
+            &claim.ring,
+            &claim.c_offset
+        ));
+        // taker session cannot complete (wrong role)
+        assert_eq!(
+            taker.complete_xmr_claim(&offer_id),
+            Err(SwapError::WrongRole)
+        );
+    }
+
+    /// Maker without a stored preimage cannot complete (fail-closed), even
+    /// with an otherwise valid adaptor recorded.
+    #[test]
+    fn xmr_claim_without_preimage_rejected() {
+        let preimage = [43u8; 32];
+        let offer_id = [6u8; 32];
+        let (ring, x, z, c_offset) = synthetic_ring(4, 1, b"int-n11");
+        let claim = XmrClaimAdaptor::build(
+            &x,
+            &z,
+            &preimage,
+            &offer_id,
+            &offer_for(&preimage).hashlock,
+            ring,
+            c_offset,
+            1,
+        )
+        .unwrap();
+        let mut maker = SwapSession::make_offer(offer_for(&preimage), 100);
+        // NO set_preimage
+        maker.mark_xmr_locked(110).unwrap();
+        maker.mark_ghost_locked(120).unwrap();
+        maker.xmr_claim = Some(claim);
+        assert_eq!(
+            maker.complete_xmr_claim(&offer_id),
+            Err(SwapError::MissingPreimage)
+        );
+        assert!(maker.completed_xmr_claim().is_none());
+    }
+
+    /// An adaptor bound to a different swap (wrong preimage) fails the
+    /// preimage binding at completion ([t]G != T).
+    #[test]
+    fn xmr_claim_wrong_preimage_completion_rejected() {
+        let preimage = [44u8; 32];
+        let offer_id = [7u8; 32];
+        let (ring, x, z, c_offset) = synthetic_ring(4, 0, b"int-n3");
+        let claim = XmrClaimAdaptor::build(
+            &x,
+            &z,
+            &preimage,
+            &offer_id,
+            &offer_for(&preimage).hashlock,
+            ring,
+            c_offset,
+            0,
+        )
+        .unwrap();
+        let mut maker = SwapSession::make_offer(offer_for(&[45u8; 32]), 100);
+        maker.set_preimage([45u8; 32]).unwrap();
+        maker.mark_xmr_locked(110).unwrap();
+        maker.mark_ghost_locked(120).unwrap();
+        maker.xmr_claim = Some(claim);
+        assert_eq!(
+            maker.complete_xmr_claim(&offer_id),
+            Err(SwapError::XmrClaimInvalid)
+        );
+        assert!(maker.completed_xmr_claim().is_none());
+    }
+
+    /// The builder rejects a ring that the primitive rejects (n < 2).
+    #[test]
+    fn xmr_claim_build_rejects_degenerate_input() {
+        let (ring, x, z, c_offset) = synthetic_ring(4, 0, b"int-n-small");
+        let e = XmrClaimAdaptor::build(
+            &x,
+            &z,
+            &[46u8; 32],
+            &[8u8; 32],
+            &offer_for(&[46u8; 32]).hashlock,
+            ring[..1].to_vec(),
+            c_offset,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(e, SwapError::XmrClaimInvalid);
     }
 }

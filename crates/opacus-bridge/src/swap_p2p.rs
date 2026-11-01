@@ -39,7 +39,9 @@ use blake3::Hasher;
 use serde::{Deserialize, Serialize};
 
 use crate::clsag::{one_time_keys, OneTimeKeys};
-use crate::xmr_swap::{hashlock_of, Offer, Phase, Role, SwapError, SwapSession};
+use crate::clsag_adaptor::ClsagAdaptorSig;
+use crate::clsag_verify::{ClsagSig, RingMember};
+use crate::xmr_swap::{hashlock_of, Offer, Phase, Role, SwapError, SwapSession, XmrClaimAdaptor};
 
 /// Wire protocol identifier; frames with a different tag are rejected.
 pub const PROTOCOL: &str = "ghost-swap-p2p-v1";
@@ -108,6 +110,12 @@ pub struct Frame {
     /// hashed into the offer id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptor: Option<OfferAdaptor>,
+    /// WG-CLSAG-adaptor-int: optional Monero-side claim adaptor. Present
+    /// only on Claim frames from adaptor-enabled takers; `serde(default)`
+    /// keeps v1 frames decodable, old binaries ignore the unknown JSON
+    /// field, offer ids stay v1-stable. Bilateral off-chain data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmr_claim: Option<XmrClaimSidecar>,
     pub protocol: String,
     #[serde(flatten)]
     pub msg: SwapNetMessage,
@@ -117,6 +125,7 @@ impl Frame {
     pub fn new(msg: SwapNetMessage) -> Self {
         Frame {
             adaptor: None,
+            xmr_claim: None,
             protocol: PROTOCOL.to_string(),
             msg,
         }
@@ -208,6 +217,10 @@ pub enum SwapNetError {
     /// from the revealed preimage does not match the sidecar announced at
     /// offer time (fail-closed GhostLocked rejection).
     OneTimeKeyMismatch,
+    /// WG-CLSAG-adaptor-int: the Monero-side claim adaptor sidecar is
+    /// structurally malformed (hex, lengths, index range) or appears on a
+    /// frame that must not carry it.
+    XmrClaimSidecar(&'static str),
     Frame(String),
 }
 
@@ -226,6 +239,7 @@ impl std::fmt::Display for SwapNetError {
             SwapNetError::OneTimeKeyMismatch => {
                 write!(f, "offer one-time key does not match the revealed preimage")
             }
+            SwapNetError::XmrClaimSidecar(m) => write!(f, "xmr claim sidecar: {m}"),
             SwapNetError::Frame(m) => write!(f, "frame: {m}"),
         }
     }
@@ -317,6 +331,114 @@ impl OfferAdaptor {
             return Err(SwapNetError::MalformedOffer("bad one-time key binding"));
         }
         Ok(OneTimeKeys { p, image })
+    }
+}
+
+/// WG-CLSAG-adaptor-int: hex wire form of the taker's pre-signed Monero
+/// claim adaptor - the bilateral off-chain data block of the CLSAG adaptor
+/// (scope doc WP-B section 2). Travels as an OPTIONAL Frame-level sidecar
+/// on Claim frames only; a Claim without it follows the v1 path unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct XmrClaimSidecar {
+    /// Pre-signature responses s' (hex, one per ring member; s[di] = s'_di).
+    pub s: Vec<String>,
+    /// Initial challenge c1 (hex).
+    pub c1: String,
+    /// CLSAG auxiliary scalar d (hex).
+    pub d: String,
+    /// T = [t]G (hex).
+    pub t_point: String,
+    /// T_h = [t]Hp(P) (hex).
+    pub t_h_point: String,
+    /// R_G = [a]G (hex).
+    pub r_g: String,
+    /// R_H = [a]Hp(P) (hex).
+    pub r_h: String,
+    /// Signer index in the ring (bilateral, hidden on-chain).
+    pub di: usize,
+    /// Key image I = [x]Hp(P) of the claimed one-time output (hex).
+    pub key_image: String,
+    /// Pedersen offset C_offset (hex).
+    pub c_offset: String,
+    /// Ring destinations (hex, one per member).
+    pub ring_dests: Vec<String>,
+    /// Ring masks (hex, one per member).
+    pub ring_masks: Vec<String>,
+}
+
+impl XmrClaimSidecar {
+    /// Structural validation only: every field parses as 32-byte hex,
+    /// array lengths agree (|s| = |dests| = |masks| = n, n >= 2) and
+    /// di < n. The cryptographic checks (adaptor verification, message
+    /// binding, preimage binding, monerod acceptance) run on the maker
+    /// side against the session - fail-closed before any state transition.
+    pub fn to_claim(&self) -> Result<XmrClaimAdaptor, SwapNetError> {
+        let bad = |m: &'static str| Err(SwapNetError::XmrClaimSidecar(m));
+        let n = self.ring_dests.len();
+        if n < 2 || self.ring_masks.len() != n || self.s.len() != n {
+            return bad("length mismatch");
+        }
+        if self.di >= n {
+            return bad("di out of range");
+        }
+        fn one(v: &str) -> Result<[u8; 32], SwapNetError> {
+            let raw = hex::decode(v).map_err(|_| SwapNetError::XmrClaimSidecar("bad hex"))?;
+            if raw.len() != 32 {
+                return Err(SwapNetError::XmrClaimSidecar("bad length"));
+            }
+            let mut out = [0u8; 32];
+            out.copy_from_slice(&raw);
+            Ok(out)
+        }
+        let mut s = Vec::with_capacity(n);
+        for v in &self.s {
+            s.push(one(v)?);
+        }
+        let mut ring = Vec::with_capacity(n);
+        for (dest, mask) in self.ring_dests.iter().zip(self.ring_masks.iter()) {
+            ring.push(RingMember {
+                dest: one(dest)?,
+                mask: one(mask)?,
+            });
+        }
+        Ok(XmrClaimAdaptor {
+            adaptor: ClsagAdaptorSig {
+                sig: ClsagSig {
+                    s,
+                    c1: one(&self.c1)?,
+                    d: one(&self.d)?,
+                },
+                t_point: one(&self.t_point)?,
+                t_h_point: one(&self.t_h_point)?,
+                r_g: one(&self.r_g)?,
+                r_h: one(&self.r_h)?,
+                di: self.di,
+            },
+            ring,
+            key_image: one(&self.key_image)?,
+            c_offset: one(&self.c_offset)?,
+        })
+    }
+
+    /// Encode the protocol record for the wire (taker side).
+    pub fn from_claim(claim: &XmrClaimAdaptor) -> Self {
+        fn hx(v: &[u8; 32]) -> String {
+            hex::encode(v)
+        }
+        XmrClaimSidecar {
+            s: claim.adaptor.sig.s.iter().map(hx).collect(),
+            c1: hx(&claim.adaptor.sig.c1),
+            d: hx(&claim.adaptor.sig.d),
+            t_point: hx(&claim.adaptor.t_point),
+            t_h_point: hx(&claim.adaptor.t_h_point),
+            r_g: hx(&claim.adaptor.r_g),
+            r_h: hx(&claim.adaptor.r_h),
+            di: claim.adaptor.di,
+            key_image: hx(&claim.key_image),
+            c_offset: hx(&claim.c_offset),
+            ring_dests: claim.ring.iter().map(|m| hx(&m.dest)).collect(),
+            ring_masks: claim.ring.iter().map(|m| hx(&m.mask)).collect(),
+        }
     }
 }
 
@@ -566,6 +688,37 @@ impl SwapNet {
         encode_frame(&frame).map_err(|e| SwapNetError::Frame(e.to_string()))
     }
 
+    /// WG-CLSAG-adaptor-int: taker claims GHOST with the revealed
+    /// preimage; if the session carries the pre-signed Monero claim
+    /// adaptor ([`SwapSession::attach_xmr_claim`]) it rides the frame as
+    /// the `xmr_claim` sidecar. Drives the local state machine to
+    /// `Claimed` (the wire-level auto-Claim reply of the GhostLocked
+    /// handler is the v1 legacy path and stays sidecar-less).
+    pub fn publish_claim(
+        &mut self,
+        offer_id_hex: &str,
+        preimage: &[u8; 32],
+        current_height: u64,
+    ) -> Result<Vec<u8>, SwapNetError> {
+        let id = parse_hex32(offer_id_hex)?;
+        let t = self
+            .sessions
+            .get_mut(&id)
+            .ok_or(SwapNetError::UnknownOffer)?;
+        if t.session.role != Role::Taker {
+            return Err(SwapNetError::State(SwapError::WrongRole));
+        }
+        t.session.claim(preimage, current_height)?;
+        let mut frame = Frame::new(SwapNetMessage::Claim {
+            offer_id: offer_id_hex.to_string(),
+            preimage: hex32(preimage),
+        });
+        if let Some(claim) = t.session.xmr_claim.as_ref() {
+            frame.xmr_claim = Some(XmrClaimSidecar::from_claim(claim));
+        }
+        encode_frame(&frame).map_err(|e| SwapNetError::Frame(e.to_string()))
+    }
+
     // -- both sides ---------------------------------------------------------
 
     /// Local refund executed; produce the notice frame.
@@ -605,7 +758,19 @@ impl SwapNet {
             Some(a) => Some(a.validate()?),
             None => None,
         };
-        let replies = self.handle_message_with_otk(frame.msg, otk.as_ref(), current_height)?;
+        // WG-CLSAG-adaptor-int: the Monero claim adaptor rides ONLY Claim
+        // frames; structurally valid sidecars are decoded here, the
+        // cryptographic checks run in the Claim handler against the
+        // session (fail-closed, before any state transition).
+        let xmr_claim = match (&frame.xmr_claim, &frame.msg) {
+            (Some(sidecar), SwapNetMessage::Claim { .. }) => Some(sidecar.to_claim()?),
+            (Some(_), _) => {
+                return Err(SwapNetError::XmrClaimSidecar("sidecar on non-claim frame"))
+            }
+            (None, _) => None,
+        };
+        let replies =
+            self.handle_message_with_xmr_claim(frame.msg, otk.as_ref(), xmr_claim, current_height)?;
         replies
             .iter()
             .map(|m| {
@@ -624,7 +789,7 @@ impl SwapNet {
         msg: SwapNetMessage,
         current_height: u64,
     ) -> Result<Vec<SwapNetMessage>, SwapNetError> {
-        self.handle_message_with_otk(msg, None, current_height)
+        self.handle_message_with_xmr_claim(msg, None, None, current_height)
     }
 
     /// WG-21: as [`Self::handle_message`], with the offer-side one-time
@@ -634,6 +799,19 @@ impl SwapNet {
         &mut self,
         msg: SwapNetMessage,
         otk: Option<&OneTimeKeys>,
+        current_height: u64,
+    ) -> Result<Vec<SwapNetMessage>, SwapNetError> {
+        self.handle_message_with_xmr_claim(msg, otk, None, current_height)
+    }
+
+    /// WG-CLSAG-adaptor-int: as [`Self::handle_message_with_otk`], with
+    /// the Monero-side claim adaptor decoded from the Frame sidecar
+    /// (already structurally validated by [`Self::receive_frame`]).
+    pub fn handle_message_with_xmr_claim(
+        &mut self,
+        msg: SwapNetMessage,
+        otk: Option<&OneTimeKeys>,
+        xmr_claim: Option<XmrClaimAdaptor>,
         current_height: u64,
     ) -> Result<Vec<SwapNetMessage>, SwapNetError> {
         match msg {
@@ -721,6 +899,7 @@ impl SwapNet {
             }
             SwapNetMessage::Claim { offer_id, preimage } => {
                 let pre = parse_hex32(&preimage)?;
+                let id = parse_hex32(&offer_id)?;
                 let t = self.tracked_mut(&offer_id)?;
                 if t.session.role != Role::Maker {
                     return Err(SwapNetError::State(SwapError::WrongRole));
@@ -730,6 +909,21 @@ impl SwapNet {
                 }
                 if hashlock_of(&pre) != t.session.offer.hashlock {
                     return Err(SwapNetError::State(SwapError::BadPreimage));
+                }
+                // WG-CLSAG-adaptor-int: complete the taker's pre-signed
+                // Monero claim BEFORE accepting the claim - verification,
+                // the preimage binding ([t]G == T with the maker's own
+                // preimage) and the monerod acceptance gate must all pass,
+                // otherwise the frame is rejected and the session stays
+                // untouched (no peer_claimed, refund window keeps running).
+                // A Claim WITHOUT the sidecar follows the v1 path unchanged.
+                if let Some(claim) = xmr_claim {
+                    let hashlock = t.session.offer.hashlock;
+                    if !claim.verify_for(&id, &hashlock) {
+                        return Err(SwapNetError::State(SwapError::XmrClaimInvalid));
+                    }
+                    t.session.xmr_claim = Some(claim);
+                    t.session.complete_xmr_claim(&id)?;
                 }
                 t.peer_claimed = true;
                 t.claimed_preimage = Some(pre);
@@ -1162,6 +1356,7 @@ mod tests {
         let mut taker = SwapNet::new();
         let frame = Frame {
             adaptor: None,
+            xmr_claim: None,
             protocol: "other-proto".to_string(),
             msg: SwapNetMessage::Accept {
                 offer_id: hex32(&[1u8; 32]),
@@ -1276,6 +1471,398 @@ mod tests {
                 .publish_refund(&id_hex, "too early", 150)
                 .unwrap_err(),
             SwapNetError::State(SwapError::NotTimedOut)
+        );
+    }
+
+    // -- WG-CLSAG-adaptor-int ------------------------------------------------
+
+    use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as B;
+    use curve25519_dalek::scalar::Scalar;
+
+    use crate::clsag_adaptor::recover_secret;
+    use crate::clsag_verify::{hash_to_scalar, verify_clsag};
+
+    /// Domain separation of the swap secret from the WG-21 OTK seed (the
+    /// hashlock separation is pinned in xmr_swap tests).
+    #[test]
+    fn swap_secret_domain_separated_from_offer_otk() {
+        assert_ne!(crate::xmr_swap::swap_secret(&PREIMAGE), otk_seed(&PREIMAGE));
+    }
+
+    /// Deterministic synthetic ring: decoys are prime-order points, the
+    /// real member's mask satisfies [mask_di] - [C_offset] = [z]G.
+    fn synth_claim(
+        offer_id: &[u8; 32],
+        hashlock: &[u8; 32],
+        preimage: &[u8; 32],
+        n: usize,
+        di: usize,
+        tag: &[u8],
+    ) -> XmrClaimAdaptor {
+        let nz = |parts: &[&[u8]]| -> [u8; 32] {
+            let mut buf = tag.to_vec();
+            for p in parts {
+                buf.extend_from_slice(p);
+            }
+            hash_to_scalar(&buf).to_bytes()
+        };
+        let x = nz(&[b"x"]);
+        let z = nz(&[b"z"]);
+        let k = nz(&[b"k"]);
+        let x_s = Scalar::from_bytes_mod_order(x);
+        let z_s = Scalar::from_bytes_mod_order(z);
+        let k_s = Scalar::from_bytes_mod_order(k);
+        let c_offset = (k_s * B).compress().to_bytes();
+        let mut ring = Vec::with_capacity(n);
+        for i in 0..n {
+            if i == di {
+                ring.push(RingMember {
+                    dest: (x_s * B).compress().to_bytes(),
+                    mask: ((k_s + z_s) * B).compress().to_bytes(),
+                });
+            } else {
+                let r = Scalar::from_bytes_mod_order(nz(&[b"dest", &(i as u64).to_le_bytes()]));
+                let q = Scalar::from_bytes_mod_order(nz(&[b"mask", &(i as u64).to_le_bytes()]));
+                ring.push(RingMember {
+                    dest: (r * B).compress().to_bytes(),
+                    mask: (q * B).compress().to_bytes(),
+                });
+            }
+        }
+        XmrClaimAdaptor::build(&x, &z, preimage, offer_id, hashlock, ring, c_offset, di)
+            .expect("synthetic claim adaptor must build")
+    }
+
+    /// P1 honest loop OVER THE WIRE: the taker attaches the pre-signed
+    /// claim, publish_claim rides the sidecar, the maker completes it with
+    /// his own preimage and the stored signature passes the UNMODIFIED
+    /// monerod-compatible verify_clsag; recover_secret returns the swap
+    /// secret (the acceptance gate of the whole integration).
+    #[test]
+    fn xmr_claim_honest_loop_over_wire() {
+        let mut maker = SwapNet::new();
+        let mut taker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let id = offer_id_of(&payload());
+
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        let lock_wire = taker.publish_xmr_lock(&id_hex, "xmr-tx-int", 110).unwrap();
+        maker.receive_frame(&lock_wire, 0).unwrap();
+        let ghost_wire = maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-int", 120)
+            .unwrap();
+        // the v1 auto-Claim reply stays sidecar-less (legacy path)
+        let auto_replies = taker.receive_frame(&ghost_wire, 0).unwrap();
+        assert_eq!(auto_replies.len(), 1);
+        assert!(decode_frame(&auto_replies[0]).unwrap().xmr_claim.is_none());
+
+        // adaptor-enabled taker: attach + publish_claim (manual)
+        let hashlock = hashlock_of(&PREIMAGE);
+        let claim = synth_claim(&id, &hashlock, &PREIMAGE, 8, 3, b"int-p1");
+        let t = taker.session(&id_hex).unwrap();
+        assert_eq!(t.session.phase, Phase::GhostLocked);
+        taker
+            .sessions
+            .get_mut(&id)
+            .unwrap()
+            .session
+            .attach_xmr_claim(claim.clone())
+            .unwrap();
+        let claim_wire = taker.publish_claim(&id_hex, &PREIMAGE, 130).unwrap();
+        let claim_frame = decode_frame(&claim_wire).unwrap();
+        let sidecar = claim_frame.xmr_claim.expect("sidecar must ride the claim");
+        // the sidecar must survive a byte roundtrip
+        assert_eq!(sidecar, XmrClaimSidecar::from_claim(&claim));
+        assert_eq!(
+            taker.session(&id_hex).unwrap().session.phase,
+            Phase::Claimed
+        );
+
+        // maker completes the claim fail-closed
+        maker.receive_frame(&claim_wire, 0).unwrap();
+        let mt = maker.session(&id_hex).unwrap();
+        assert!(mt.peer_claimed);
+        let completed = mt
+            .session
+            .completed_xmr_claim()
+            .expect("completed signature must be stored")
+            .clone();
+        // THE acceptance gate: the completed signature verifies with the
+        // UNMODIFIED monerod-compatible verifier
+        let message = crate::xmr_swap::swap_claim_message(&id, &hashlock);
+        assert!(verify_clsag(
+            &message,
+            &completed,
+            &claim.key_image,
+            &claim.ring,
+            &claim.c_offset
+        ));
+        // the completed on-chain signature hands the holder the secret
+        let recovered =
+            recover_secret(&completed, &claim.adaptor, &claim.ring).expect("recovery must succeed");
+        assert_eq!(recovered, crate::xmr_swap::swap_secret(&PREIMAGE));
+    }
+
+    /// P2 the sidecar roundtrip is deterministic and lossless; two builds
+    /// over the same inputs produce byte-identical sidecars.
+    #[test]
+    fn xmr_claim_sidecar_deterministic_roundtrip() {
+        let hashlock = hashlock_of(&PREIMAGE);
+        let a = synth_claim(&[1u8; 32], &hashlock, &PREIMAGE, 6, 2, b"int-p2");
+        let b = synth_claim(&[1u8; 32], &hashlock, &PREIMAGE, 6, 2, b"int-p2");
+        let wa = serde_json::to_vec(&XmrClaimSidecar::from_claim(&a)).unwrap();
+        let wb = serde_json::to_vec(&XmrClaimSidecar::from_claim(&b)).unwrap();
+        assert_eq!(wa, wb);
+        let back = XmrClaimSidecar::from_claim(&a).to_claim().unwrap();
+        assert_eq!(back, a);
+    }
+
+    /// P4 legacy path unchanged: a Claim without the sidecar is accepted
+    /// on a session without adaptor bookkeeping; publish_claim without an
+    /// attached adaptor produces a sidecar-less frame.
+    #[test]
+    fn xmr_claim_legacy_path_unchanged() {
+        let mut maker = SwapNet::new();
+        let mut taker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        let lock_wire = taker
+            .publish_xmr_lock(&id_hex, "xmr-tx-legacy", 110)
+            .unwrap();
+        maker.receive_frame(&lock_wire, 0).unwrap();
+        let ghost_wire = maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-legacy", 120)
+            .unwrap();
+        let replies = taker.receive_frame(&ghost_wire, 0).unwrap();
+        assert_eq!(replies.len(), 1);
+        // the maker accepts the sidecar-less v1 claim exactly as before
+        maker.receive_frame(&replies[0], 0).unwrap();
+        let mt = maker.session(&id_hex).unwrap();
+        assert!(mt.peer_claimed);
+        assert!(mt.session.completed_xmr_claim().is_none());
+        // and a manual publish_claim without an attachment stays sidecar-less
+        let mut taker2 = SwapNet::new();
+        taker2.receive_frame(&offer_wire, 100).unwrap();
+        taker2
+            .publish_xmr_lock(&id_hex, "xmr-tx-legacy2", 110)
+            .unwrap();
+        taker2
+            .sessions
+            .get_mut(&offer_id_of(&payload()))
+            .unwrap()
+            .session
+            .mark_ghost_locked(120)
+            .unwrap();
+        let wire = taker2.publish_claim(&id_hex, &PREIMAGE, 130).unwrap();
+        assert!(decode_frame(&wire).unwrap().xmr_claim.is_none());
+    }
+
+    /// N4/N5-style: an adaptor built for a DIFFERENT swap (offer binding)
+    /// is rejected fail-closed - the message binding fails.
+    #[test]
+    fn xmr_claim_wrong_offer_binding_rejected() {
+        let mut maker = SwapNet::new();
+        let mut taker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        maker
+            .receive_frame(&taker.publish_xmr_lock(&id_hex, "tx", 110).unwrap(), 0)
+            .unwrap();
+        maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-int", 120)
+            .unwrap();
+
+        // built for another offer id -> wrong message binding
+        let foreign = synth_claim(
+            &[9u8; 32],
+            &hashlock_of(&PREIMAGE),
+            &PREIMAGE,
+            4,
+            1,
+            b"int-n4",
+        );
+        let mut frame = decode_frame(
+            &encode_frame(&Frame::new(SwapNetMessage::Claim {
+                offer_id: id_hex.clone(),
+                preimage: hex32(&PREIMAGE),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        frame.xmr_claim = Some(XmrClaimSidecar::from_claim(&foreign));
+        let wire = encode_frame(&frame).unwrap();
+        assert_eq!(
+            maker.receive_frame(&wire, 0).unwrap_err(),
+            SwapNetError::State(SwapError::XmrClaimInvalid)
+        );
+        // fail-closed: the session is untouched
+        let t = maker.session(&id_hex).unwrap();
+        assert!(!t.peer_claimed);
+        assert!(t.session.completed_xmr_claim().is_none());
+        assert_eq!(t.session.phase, Phase::GhostLocked);
+    }
+
+    /// N1/N2/N6-style: tampered pre-signatures and ring substitution are
+    /// rejected by the maker-side verification.
+    #[test]
+    fn xmr_claim_tampered_fields_rejected() {
+        let hashlock = hashlock_of(&PREIMAGE);
+        let id = offer_id_of(&payload());
+        let claim = synth_claim(&id, &hashlock, &PREIMAGE, 4, 1, b"int-n1");
+        let mut sidecar = XmrClaimSidecar::from_claim(&claim);
+
+        // tampered decoy pre-signature (hex-decodable, wrong value)
+        let original = sidecar.s[0].clone();
+        let mut raw = hex::decode(&original).unwrap();
+        raw[0] ^= 1;
+        sidecar.s[0] = hex::encode(&raw);
+        assert!(!sidecar.to_claim().unwrap().verify_for(&id, &hashlock));
+
+        // tampered signer pre-signature
+        let mut sidecar = XmrClaimSidecar::from_claim(&claim);
+        let mut raw = hex::decode(&sidecar.s[1]).unwrap();
+        raw[31] ^= 1;
+        sidecar.s[1] = hex::encode(&raw);
+        assert!(!sidecar.to_claim().unwrap().verify_for(&id, &hashlock));
+
+        // ring substitution: two decoy destinations swapped
+        let mut sidecar = XmrClaimSidecar::from_claim(&claim);
+        sidecar.ring_dests.swap(0, 2);
+        let parsed = sidecar.to_claim().unwrap();
+        assert!(!parsed.verify_for(&id, &hashlock));
+
+        // wrong hashlock binding
+        let mut sidecar = XmrClaimSidecar::from_claim(&claim);
+        sidecar.c_offset = hex32(&[0u8; 32]);
+        assert!(!sidecar.to_claim().unwrap().verify_for(&id, &hashlock));
+    }
+
+    /// N3-style: an adaptor honestly bound to a DIFFERENT swap secret (a
+    /// different preimage) is rejected at maker-side completion: the
+    /// [t]G == T binding fails for the maker's own preimage. (A tampered
+    /// T on an honest adaptor is caught even earlier - verify_adaptor
+    /// checks the L' + T == R_G binding equation.)
+    #[test]
+    fn xmr_claim_wrong_secret_completion_rejected() {
+        let hashlock = hashlock_of(&PREIMAGE);
+        let id = offer_id_of(&payload());
+        // bound to another preimage: honest for that preimage, foreign here
+        let foreign = synth_claim(&id, &hashlock, &[77u8; 32], 4, 1, b"int-n3b");
+        // verification against THIS swap's message binding passes...
+        assert!(foreign.verify_for(&id, &hashlock));
+        // ...but completion with the maker's own preimage fails [t]G == T.
+        assert!(foreign.complete_for(&PREIMAGE, &id, &hashlock).is_err());
+    }
+
+    /// N7-N9, N13: structural sidecar failures are rejected before any
+    /// state transition.
+    #[test]
+    fn xmr_claim_sidecar_structural_rejects() {
+        let hashlock = hashlock_of(&PREIMAGE);
+        let id = offer_id_of(&payload());
+        let claim = synth_claim(&id, &hashlock, &PREIMAGE, 4, 1, b"int-n7");
+
+        // di out of range
+        let mut sc = XmrClaimSidecar::from_claim(&claim);
+        sc.di = 4;
+        assert_eq!(
+            sc.to_claim().unwrap_err(),
+            SwapNetError::XmrClaimSidecar("di out of range")
+        );
+
+        // s length mismatch
+        let mut sc = XmrClaimSidecar::from_claim(&claim);
+        sc.s.pop();
+        assert_eq!(
+            sc.to_claim().unwrap_err(),
+            SwapNetError::XmrClaimSidecar("length mismatch")
+        );
+
+        // ring masks length mismatch
+        let mut sc = XmrClaimSidecar::from_claim(&claim);
+        sc.ring_masks.pop();
+        assert_eq!(
+            sc.to_claim().unwrap_err(),
+            SwapNetError::XmrClaimSidecar("length mismatch")
+        );
+
+        // bad hex
+        let mut sc = XmrClaimSidecar::from_claim(&claim);
+        sc.c1 = "zz".to_string();
+        assert_eq!(
+            sc.to_claim().unwrap_err(),
+            SwapNetError::XmrClaimSidecar("bad hex")
+        );
+
+        // bad length
+        let mut sc = XmrClaimSidecar::from_claim(&claim);
+        sc.c1 = "aabb".to_string();
+        assert_eq!(
+            sc.to_claim().unwrap_err(),
+            SwapNetError::XmrClaimSidecar("bad length")
+        );
+    }
+
+    /// N5-style: a non-canonical s' encoding is rejected by the
+    /// maker-side verification (canonical_scalar in the primitive).
+    #[test]
+    fn xmr_claim_non_canonical_s_rejected() {
+        let hashlock = hashlock_of(&PREIMAGE);
+        let id = offer_id_of(&payload());
+        let claim = synth_claim(&id, &hashlock, &PREIMAGE, 4, 1, b"int-n5");
+        let mut sidecar = XmrClaimSidecar::from_claim(&claim);
+        sidecar.s[0] = hex::encode([0xffu8; 32]); // >= l, canonical parse fails
+        assert!(!sidecar.to_claim().unwrap().verify_for(&id, &hashlock));
+    }
+
+    /// N10-style: the claim sidecar is only accepted on Claim frames.
+    #[test]
+    fn xmr_claim_sidecar_on_non_claim_frame_rejected() {
+        let mut taker = SwapNet::new();
+        let hashlock = hashlock_of(&PREIMAGE);
+        let claim = synth_claim(&[2u8; 32], &hashlock, &PREIMAGE, 4, 1, b"int-n10");
+        let mut frame = Frame::new(SwapNetMessage::XmrLocked {
+            offer_id: hex32(&[2u8; 32]),
+            xmr_tx_hash: "tx".to_string(),
+            height: 10,
+        });
+        frame.xmr_claim = Some(XmrClaimSidecar::from_claim(&claim));
+        let wire = encode_frame(&frame).unwrap();
+        assert_eq!(
+            taker.receive_frame(&wire, 0).unwrap_err(),
+            SwapNetError::XmrClaimSidecar("sidecar on non-claim frame")
+        );
+    }
+
+    /// N12-style: the fail-closed ordering is unchanged - a claim with a
+    /// valid sidecar but the wrong preimage is still BadPreimage.
+    #[test]
+    fn xmr_claim_bad_preimage_still_rejected() {
+        let mut maker = SwapNet::new();
+        let mut taker = SwapNet::new();
+        let (id_hex, offer_wire) = maker.publish_offer(offer(), PREIMAGE).unwrap();
+        let id = offer_id_of(&payload());
+        taker.receive_frame(&offer_wire, 100).unwrap();
+        maker
+            .receive_frame(&taker.publish_xmr_lock(&id_hex, "tx", 110).unwrap(), 0)
+            .unwrap();
+        maker
+            .publish_ghost_lock(&id_hex, "ghost-burn-int", 120)
+            .unwrap();
+        let claim = synth_claim(&id, &hashlock_of(&PREIMAGE), &PREIMAGE, 4, 1, b"int-n12");
+        let mut frame = decode_frame(
+            &encode_frame(&Frame::new(SwapNetMessage::Claim {
+                offer_id: id_hex.clone(),
+                preimage: hex32(&[7u8; 32]),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        frame.xmr_claim = Some(XmrClaimSidecar::from_claim(&claim));
+        let wire = encode_frame(&frame).unwrap();
+        assert_eq!(
+            maker.receive_frame(&wire, 0).unwrap_err(),
+            SwapNetError::State(SwapError::BadPreimage)
         );
     }
 }
