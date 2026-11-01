@@ -12,6 +12,41 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
 
+### Added
+
+- WG-CLSAG-adaptor monerod-compatible CLSAG adaptor signatures
+  (opacus-bridge, `clsag_adaptor.rs`): a Monero one-time spend is
+  pre-signed as a STANDARD CLSAG bound to the hidden swap secret t -
+  pre-signature s'_di = a - t - c_di*(mu_P*x + mu_C*z) with the
+  monerod-compatible aggregation hashes (CLSAG_agg_0 / CLSAG_agg_1),
+  round skeleton (CLSAG_round) and real elligator Hp from
+  `clsag_verify.rs`, and the auxiliary image D = [z/8]Hp(P) (the
+  verifier consumes D8 = [8]D, so only z/8 closes the R-leg). The
+  bilateral adaptor block {T = [t]G, T_h = [t]Hp(P), R_G = [a]G,
+  R_H = [a]Hp(P), di} never enters any challenge input: the initial
+  challenge is the standard monerod one over the nonce points
+  H(round_skeleton || R_G || R_H), so completing with t (s_di = s'_di +
+  t) yields a signature that passes the UNMODIFIED monerod-compatible
+  verify_clsag - the acceptance gate - and the completed on-chain
+  signature hands the adaptor holder the secret t = s_di - s'_di
+  (fail-closed [t]G == T and [t]Hp(P_di) == T_h consistency checks).
+  verify_adaptor reuses the monerod challenge chain verbatim and adds
+  only the two binding equations L'_di + T == R_G and
+  R'_di + T_h == R_H; the signer index di is bilateral off-chain data
+  and stays hidden on-chain (the completed signature is an ordinary
+  CLSAG). Deterministic domain-separated nonce
+  (ghost-bridge/clsag-adaptor/nonce-v1 / .../decoy-v1); fail-closed
+  discipline: canonical scalars < l, decompressible and non-degenerate
+  T / T_h / R_G / R_H / I / D / ring points, degenerate secrets (x, t,
+  z = 0) rejected at signing, non-canonical t rejected at completion.
+  24-test matrix P1-P6 / N1-N18 (honest loop through the unmodified
+  verifier, determinism, D = [z/8]Hp algebra, di edges, ring size 2,
+  tamper matrix over every adaptor field, ring substitution,
+  non-canonical encodings, degenerate points, wrong-secret completion
+  and recovery). The v0.3 single-signer primitive `clsag.rs` stays
+  untouched; scope doc docs/WG-CLSAG-adaptor-scope.md. opacus-bridge:
+  86 -> 110 lib tests (+ 6 fixture).
+
 ## [0.9.0] - 2026-11-01
 
 ### Added

@@ -176,6 +176,15 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   consumption). Acceptance-tested against a real mainnet fixture (tx
   43bd6f45..., height 3796485, ring size 16, BulletproofPlus); benchmark
   smoke in `benches/clsag_bench.rs`.
+- `clsag_adaptor.rs`: monerod-compatible CLSAG adaptor signatures
+  (WG-CLSAG-adaptor) - a one-time spend is pre-signed as a standard CLSAG
+  bound to the swap secret t (pre-signature s'_di = a - t -
+  c*(mu_P*x + mu_C*z), D = [z/8]Hp(P)); completing with t yields a
+  signature that passes the unmodified `verify_clsag` (monerod's
+  verRctCLSAGSimple), and the completed on-chain signature hands the
+  adaptor holder the secret (t = s_di - s'_di, fail-closed [t]G / [t]Hp
+  consistency). The adaptor block {T, T_h, R_G, R_H, di} is bilateral
+  off-chain data; T never enters any challenge.
 
 ### opacus-dex (Ethereum side)
 
@@ -343,8 +352,9 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   proven inside the v4 spend circuit, public swap tail, v5 wire
   [S4 12]; chain-level swap enforcement delivered in WG-27 (see
   below). CLSAG adaptor
-  signatures for on-chain swap enforcement remain planned (Refund frames
-  are notices in v0.1).
+  signatures for on-chain swap enforcement are delivered in
+  WG-CLSAG-adaptor (see below); Refund frames stay notices on the wire
+  (v0.1).
 - Delivered (WG-27): chain-level swap enforcement - CLAIM/REFUND
   validity is a deterministic function of chain state and height
   (confirm_v5_consensus): CLAIM only while h < T with T = H_lock +
@@ -364,6 +374,16 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   ring-substitution / non-canonical matrix is rejected, 92 bridge
   tests, fail-closed benchmark smoke via `cargo bench -p opacus-bridge
   --bench clsag_bench`).
+- Delivered (WG-CLSAG-adaptor): monerod-compatible CLSAG adaptor
+  signatures - the Monero-side half of on-chain swap enforcement. A
+  one-time spend is pre-signed as a standard CLSAG bound to the swap
+  secret (pre-signature s'_di = a - t - c*(mu_P*x + mu_C*z),
+  D = [z/8]Hp(P)); completing with t passes the unmodified
+  monerod-compatible verify_clsag, and the completed on-chain signature
+  yields t = s_di - s'_di (fail-closed [t]G / [t]Hp consistency). The
+  adaptor block {T, T_h, R_G, R_H, di} is bilateral off-chain data; the
+  v5 wire stays frozen (WG-26 v1). 24-test matrix P1-P6 / N1-N18 in
+  opacus-bridge; scope doc docs/WG-CLSAG-adaptor-scope.md.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
