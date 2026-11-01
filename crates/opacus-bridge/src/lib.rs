@@ -2,6 +2,7 @@
 
 pub mod adaptor;
 pub mod clsag;
+pub mod clsag_adaptor;
 pub mod clsag_verify;
 pub mod swap;
 

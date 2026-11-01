@@ -40,9 +40,9 @@ pub const RCT_TYPE_CLSAG: u8 = 5;
 /// rctTypes.h: RCTTypeBulletproofPlus.
 pub const RCT_TYPE_BULLETPROOF_PLUS: u8 = 6;
 
-const HASH_KEY_CLSAG_AGG_0: &[u8] = b"CLSAG_agg_0";
-const HASH_KEY_CLSAG_AGG_1: &[u8] = b"CLSAG_agg_1";
-const HASH_KEY_CLSAG_ROUND: &[u8] = b"CLSAG_round";
+pub(crate) const HASH_KEY_CLSAG_AGG_0: &[u8] = b"CLSAG_agg_0";
+pub(crate) const HASH_KEY_CLSAG_AGG_1: &[u8] = b"CLSAG_agg_1";
+pub(crate) const HASH_KEY_CLSAG_ROUND: &[u8] = b"CLSAG_round";
 
 // Field constants of monero's ge_fromfe_frombytes_vartime
 // (monero/src/crypto/crypto-ops-data.c), as 32-byte little-endian values mod
@@ -125,13 +125,13 @@ pub(crate) fn keccak256(data: &[u8]) -> [u8; 32] {
 
 /// hash_to_scalar over a raw byte buffer: keccak256 then sc_reduce32
 /// (rctOps.cpp `hash_to_scalar`).
-fn hash_to_scalar(data: &[u8]) -> Scalar {
+pub(crate) fn hash_to_scalar(data: &[u8]) -> Scalar {
     Scalar::from_bytes_mod_order(keccak256(data))
 }
 
 /// 32-byte slot holding a domain tag at offset 0, zero padding after
 /// (rctSigs.cpp: `sc_0(buf); memcpy(buf, TAG, sizeof(TAG)-1);`).
-fn tag_slot(tag: &[u8]) -> [u8; 32] {
+pub(crate) fn tag_slot(tag: &[u8]) -> [u8; 32] {
     let mut slot = [0u8; 32];
     slot[..tag.len()].copy_from_slice(tag);
     slot
@@ -1079,7 +1079,7 @@ pub struct RingMember {
 
 /// Canonical scalar parse: rejects encodings >= l before any cryptographic
 /// work (fail-closed, WG-19 discipline carried over from clsag.rs).
-fn canonical_scalar(bytes: &[u8; 32]) -> Option<Scalar> {
+pub(crate) fn canonical_scalar(bytes: &[u8; 32]) -> Option<Scalar> {
     let s = Scalar::from_bytes_mod_order(*bytes);
     if s.to_bytes() != *bytes {
         return None;
@@ -1087,7 +1087,7 @@ fn canonical_scalar(bytes: &[u8; 32]) -> Option<Scalar> {
     Some(s)
 }
 
-fn decompress_point(bytes: &[u8; 32]) -> Option<EdwardsPoint> {
+pub(crate) fn decompress_point(bytes: &[u8; 32]) -> Option<EdwardsPoint> {
     CompressedEdwardsY(*bytes).decompress()
 }
 

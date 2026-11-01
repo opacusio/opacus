@@ -80,18 +80,22 @@ before any crypto; recovered t canonical before use.
 ## 3. In scope
 
 1. New module crates/opacus-bridge/src/clsag_adaptor.rs:
-   - ClsagAdaptor struct { sig: ClsagSig, t_point, t_h_point, r_g,
-     r_h, di };
-   - sign_adaptor(...) -> ClsagAdaptor (deterministic nonce);
+   - ClsagAdaptorSig struct { sig: ClsagSig, t_point, t_h_point, r_g,
+     r_h, di } (named ...Sig to avoid the root re-export collision with
+     the v0.3 clsag::ClsagAdaptor);
+   - sign_adaptor(...) -> ClsagAdaptorSig (deterministic nonce);
    - verify_adaptor(&adaptor, message, key_image, ring, c_offset) -> bool;
-   - complete(&adaptor, t) -> ClsagSig (canonical check on t);
-   - recover_secret(full: &ClsagSig, adaptor) -> Option<[u8; 32]> with
-     the [t]G / [t]Hp consistency checks;
-   - synthetic ring builder for tests (decoys = random prime-order
+   - complete(&adaptor, t) -> ClsagSig (canonical check on t AND
+     [t]G == T before any completion);
+   - recover_secret(full: &ClsagSig, adaptor, ring) -> Option<[u8; 32]>
+     with the [t]G and [t]Hp(P_di) consistency checks;
+   - synthetic ring builder for tests (decoys = deterministic prime-order
      points, zero-amount commitments; the CLSAG algebra only consumes
      ring points and C_offset, amounts are out of scope).
 2. Visibility only in clsag_verify.rs: hash_to_scalar, tag_slot,
-   canonical_scalar, decompress_point become pub(crate). NO logic changes.
+   canonical_scalar, decompress_point and the three domain tags
+   HASH_KEY_CLSAG_AGG_0 / AGG_1 / ROUND become pub(crate). NO logic
+   changes.
 3. Test suite pinned to the matrix in section 5, fail-closed.
 
 ## 4. Nonce policy
