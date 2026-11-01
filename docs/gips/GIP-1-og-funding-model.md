@@ -144,3 +144,36 @@ coinbase/subsidy enforcement (P/N convention per GIP-0 section 6).
 4. Interaction with the wOPACUS bridge treasury, if any (currently none in
    the contracts: `wOPACUS.sol` has no mint/treasury hooks beyond the
    audited quorum mint).
+
+## 9. Proposed answers in the RFC window (position of 2026-11-01)
+
+The values below are PROPOSED for the RFC discussion; they are not
+activated and do not modify section 3. A future Stage 1 Standards Track
+GIP would carry them into normative text under the caps of section 3.2.
+
+- **P-1 Allocation schedule (declining, auto-sunset)** - percentage of
+  EACH epoch's own block subsidy: epoch 1 (blocks 0-210,000) 10% =
+  210,000,000,000,000 atomic units; epoch 2 (210,000-420,000) 10% =
+  105,000,000,000,000 atomic units; epoch 3 (420,000-630,000) 5% =
+  26,250,000,000,000 atomic units; from block 630,000 onward 0% -
+  automatic, no per-block renewal (strengthens C-2 to "sunset by
+  default"). Total: 341,250,000,000,000 atomic units over the three
+  epochs = 9.29% of their combined emission (3,675,000,000,000,000)
+  and 8.125% of total emission (4,199,999,997,690,000).
+- **P-2 Time-base fact**: one epoch is 210,000 blocks x 120 s
+  (BLOCK_TIME_SECONDS, opacus-consensus) = ~292 days, so the whole
+  schedule spans ~2.4 years - not the 4-year Bitcoin horizon. Every
+  horizon argument in this schedule is recomputed in blocks, not years.
+- **P-3 Rationale (compressed)**: 10% matches the Dash/Decred treasury
+  precedent; 20% (ZIP 1014) is the documented anti-pattern and 12%
+  (ZIP 1015) is a repair value, not a starting point; 0% (Monero CCS)
+  does not cover the planned external audit cycles (Mainnet gate,
+  SECURITY.md). Within the window, flat 10% would total
+  367,500,000,000,000 - only 7.14% more - so the decisive anti-capture
+  mechanism is the AUTO-SUNSET, not the declining profile itself: past
+  block 630,000 the fund is dead unless a GIP-2 coinholder vote (C-4)
+  revives it. That makes Stage B voting a deadline, not an option.
+- **P-4 Explicitly rejected**: any continuation past epoch 3 without a
+  coinholder vote (a standing capture target once the audit bills are
+  paid); one-off top-ups outside the subsidy split (violates C-1);
+  retroactive schedule changes (violates section 3.3).

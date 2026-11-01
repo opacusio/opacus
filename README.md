@@ -458,6 +458,23 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   private weight, snapshot anchor, double-vote resistance, GIP proposal
   registry, fixed windows, quorum, no silent chain changes.
   docs/gips/GIP-2-og-oc-voting.md.
+- RFC positions filed (GIP-1 section 9, GIP-2 sections 9-10) - PROPOSED
+  values for the RFC window, not activated. GIP-1: declining allocation
+  10% / 10% / 5% of EACH epoch's own subsidy with automatic 0% from
+  block 630,000 - 341.25 trillion atomic units over three ~292-day
+  epochs (~2.4 years at 120 s blocks; flat 10% would be 367.5 trillion,
+  so the decisive anti-capture mechanism is the auto-sunset, not the
+  declining profile). GIP-2: the Stage A organization - exact weighted
+  split-safe ballots (threshold models rejected: a T*N balance splits
+  into N votes), K <= 8 notes per ballot (k = 10..13 on existing
+  circuit mechanics), T_min = 10^6 atomic, H_snap = H_open, 14-day
+  window, WG-29 sealed-enote transport with a mandatory public ballot
+  archive, deterministic off-chain tally over a consensus-derived
+  supply denominator with a 720-block challenge window, quorum 5%
+  (fund) / 2% (process), 60% YES+NO approval for fund decisions,
+  fail-closed status-quo defaults, Stage B deadline = end of GIP-1
+  epoch 3 - plus recorded known limitations and a plain-language
+  summary (what is voted, who votes, what needs no vote).
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

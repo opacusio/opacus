@@ -134,6 +134,31 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   quorum thresholds, ballot transport (raw vs WG-29 sealed enotes),
   post-snapshot note movement, dedicated vote circuit vs reuse of v4
   mechanics, delegation.
+- GIP-1/GIP-2 RFC parameter positions (docs-only, section 9 of GIP-1
+  and sections 9-10 of GIP-2; PROPOSED for the RFC window - not
+  activated). GIP-1 section 9 pins the declining allocation schedule:
+  10% / 10% / 5% of each epoch's own block subsidy with automatic 0%
+  from block 630,000 (341,250,000,000,000 atomic units over three
+  ~292-day epochs, ~2.4 years at 120 s blocks; 9.29% of the epochs'
+  emission and 8.125% of total emission; flat 10% over the same window
+  would be 367,500,000,000,000, so the decisive anti-capture mechanism
+  is the auto-sunset, which removes manual renewal as a decision class
+  and makes GIP-2 Stage B voting a deadline). GIP-2 section 9 pins the
+  Stage A organization: exact weighted split-safe ballots (threshold
+  models rejected - a T*N balance splits into N votes without identity
+  to stop it), K <= 8 notes per ballot (k = 10..13 on existing
+  v4/FcmpCircuit mechanics, ~10 s proving envelope), T_min = 10^6
+  atomic units, H_snap = H_open with a 14-day window declared in
+  advance, WG-29 sealed-enote transport with a mandatory public ballot
+  archive, deterministic off-chain tally over the consensus-derived
+  supply denominator with a 720-block challenge window, quorum 5%
+  (fund decisions) / 2% (process) and 60% YES+NO approval for fund
+  decisions, fail-closed status-quo defaults, Stage B trigger tied to
+  GIP-1 Stage 1 with the block-630,000 deadline, and recorded known
+  limitations (no private per-owner caps, vote-buying not fully
+  solvable, custodial abstention). GIP-2 section 10 adds a
+  non-normative plain-language summary (what is voted on, who votes,
+  what does not need a vote).
 
 ## [0.9.0] - 2026-11-01
 

@@ -183,3 +183,92 @@ convention).
    the first Stage A iteration (cost/latency trade-off; a vote-circuit WG
    is the natural future work package).
 6. Voting delegation (proxy weight) - currently out of scope.
+
+## 9. Proposed answers in the RFC window (position of 2026-11-01)
+
+The parameters below are PROPOSED for the RFC discussion; none of this
+is activated and none of it modifies sections 3-7 normatively. The
+items answer the open questions of section 8 in order.
+
+- **P-1 Weight model (answers 8.1 / 8.5)**: exact weighted (W1) - the
+  ballot weight V is the sum of the voter's owned note values at
+  H_snap. W1 is split-safe: fragmenting notes conserves total weight,
+  so splitting attacks are profitless. Threshold models ("one vote if
+  V >= T") are REJECTED: a T*N balance splits into N threshold-sized
+  notes and inflates N votes, and a private chain has no identity to
+  enforce one-person-one-vote. Homomorphic aggregation (a Pedersen
+  commitment to V per ballot, per-choice aggregates opened at close)
+  is a Stage A.5 privacy upgrade, not the first iteration.
+- **P-2 Ballot shape**: at most K = 8 notes per ballot - a linear stack
+  of note-proofs on the v4/FcmpCircuit mechanics (rows =
+  2 + (4+32)*17*K, an unoptimized upper bound): K=1 -> 614 rows, k=10;
+  K=8 -> 4,898 rows, k=13; the ~10 s PROVER-10S proving envelope
+  covers a ballot either way. T_min = 10^6 atomic units per ballot as
+  a dust filter (the real spam barrier is the proving cost). Larger
+  holders submit multiple ballots; weight conservation makes that
+  neutral.
+- **P-3 Snapshot and window (answers 8.1 / 8.4)**: H_snap = H_open -
+  the anchor is the frontier root at the vote OPEN height; there is no
+  separate pre-open snapshot window to game. Window length 10,080
+  blocks (14 days at 120 s blocks); all voting parameters are declared
+  in the voting proposal at least 14 days before H_open. Notes moved
+  after H_open carry no weight (R-2); re-snapshotting on dispute is
+  NOT planned (fail-closed: the declared anchor stands).
+- **P-4 Transport (answer 8.3)**: primary - ballots are WG-29 sealed
+  enote payloads over the v5 wire gossip (network-layer anonymity
+  equal to transaction broadcast, zero consensus impact); fallback -
+  raw publication, documented as weaker. The tally engine MUST publish
+  the full ballot archive at close; the archive is the auditable
+  minutes.
+- **P-5 Tally and recording (Stage A)**: deterministic off-chain tally
+  (per-ballot verification is milliseconds; anyone can replay). The
+  public quorum denominator is sum of block_reward(0..H_snap) - a
+  deterministic function of consensus, so no balance is revealed.
+  Challenge window of 720 blocks (1 day) between tally publication and
+  the GIP status recording; a recording inconsistent with a public
+  replay is a process violation (fail-closed).
+- **P-6 Quorum and approval (answer 8.2)**: quorum 5% of supply at
+  H_snap for fund decisions (the GIP-1 C-4 class) and 2% for process
+  transitions - above the ZIP 1016 ~2% reference for fund votes,
+  deliberately, to compensate Stage A's off-chain finality. Approval
+  threshold 60% of YES+NO weight for fund decisions, simple majority
+  for process votes; ABSTAIN counts toward participation only. Quorum
+  not met = status quo persists (fail-closed governance).
+- **P-7 Stage B trigger**: the on-chain variant (section 3.3) is
+  drafted when GIP-1 Stage 1 moves toward activation. The practical
+  deadline is the end of GIP-1 epoch 3 (block 630,000 of the schedule
+  proposed in GIP-1 section 9): past it the fund auto-sunsets, and
+  only a coinholder vote can revive it.
+- **P-8 Known limitations (recorded, not hidden)**: per-owner weight
+  caps are impossible without identity (the same exposure exists in
+  ZIP 1016, only publicly there); vote-buying/coercion is not fully
+  solvable privately (MACI-style key-switching is a future work
+  package); exchange-custodied notes vote only if the custodian votes;
+  Stage A finality is process finality - replay-detectable,
+  chain-enforced only in Stage B.
+- **P-9 Work packages**: WP-1 ballot builder in opacus-wallet (reuses
+  the v4/FcmpCircuit prove path with a DOM_VS domain tag; no new
+  circuit for the first iteration); WP-2 deterministic tally engine
+  with golden vectors and a replay mode; WP-3 WG-29 ballot transport
+  profile plus the raw fallback; testnet dress rehearsal before the
+  first real vote.
+
+## 10. Plain-language summary (non-normative)
+
+- **What is voted on**: (1) accepting or rejecting a GIP (status
+  transitions); (2) changes to an EXISTING fund policy - percentage,
+  sunset, recipient rules - never individual payments, which follow
+  the already-approved policy; (3) a vote never changes protocol rules
+  by itself: consensus, wire or circuit changes still require a
+  Standards Track GIP with green CI (R-7).
+- **Who votes**: any holder of OPACUS notes at H_open. Weight = amount
+  held, proven in zero knowledge - no addresses, no balances, no note
+  identities are revealed. One note votes once per proposal (VS) and
+  is not burned; coins bought after H_open carry no weight; custodied
+  coins vote only if the custodian votes; maintainers hold no special
+  weight - one atomic unit is one unit of weight.
+- **What does NOT need a vote**: today (GIP-1 Stage 0) there is no
+  on-chain fund at all - expenses come from voluntary sources under
+  public accounting; later, routine payouts follow the approved
+  policy; only policy CHANGES go to a vote; no quorum means status
+  quo.
