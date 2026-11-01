@@ -412,6 +412,19 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   sidecar rejects the frame before any state transition; the v1 path
   is unchanged. 17 new tests in opacus-bridge; scope doc
   docs/WG-CLSAG-adaptor-int-scope.md.
+- Delivered (GIP-0): the GIP process spec (ZIP 0 analog) - docs-only.
+  Defines GIP types (Standards Track / Process / Informational), the
+  lifecycle Draft -> RFC (>= 7 days) -> Accepted -> Activated (+
+  Rejected / Withdrawn / Superseded), monotonic numbering never reused,
+  the normative section template, and the WG/WP linkage rule: every work
+  package touching consensus, wire, bridge, wallet or economics cites the
+  GIP it implements, housekeeping WPs state the absence of one
+  (WG-16..WG-29 / WG-CLSAG* / PROVER-10S are grandfathered). Release
+  discipline is pinned: consecutive minor tags, tag <-> CHANGELOG section
+  1:1, release notes composed from the CHANGELOG (tag chain
+  v0.3.0..v0.9.0 verified consecutive; v0.8.0 = da222bf, 2026-10-28).
+  Future governance work (Opacus Grants funding, decentralized OG/OC
+  voting) lands as GIP documents first. docs/gips/GIP-0-gip-process.md.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

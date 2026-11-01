@@ -83,6 +83,20 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   SwapNet::receive_frame). Scope doc
   docs/WG-CLSAG-adaptor-int-scope.md. opacus-bridge: 110 -> 127 lib
   tests.
+- GIP-0, the Ghost Improvement Proposal process (docs-only,
+  `docs/gips/GIP-0-gip-process.md`, ZIP 0 analog): GIP types
+  (Standards Track / Process / Informational), lifecycle
+  Draft -> RFC (>= 7 days) -> Accepted -> Activated (+ Rejected /
+  Withdrawn / Superseded), monotonic numbering never reused, the
+  normative section template, and the WG/WP linkage rule - every work
+  package touching consensus, wire, bridge, wallet or economics cites
+  the GIP it implements; WG-16..WG-29 / WG-CLSAG* / PROVER-10S are
+  grandfathered. Release discipline pinned: consecutive minor tags,
+  tag <-> CHANGELOG section 1:1, release notes composed from the
+  CHANGELOG (tag chain v0.3.0..v0.9.0 verified consecutive; v0.8.0 =
+  da222bf, 2026-10-28). Future governance items (Opacus Grants funding
+  model, decentralized OG/OC voting) will land as GIP documents before
+  code.
 
 ## [0.9.0] - 2026-11-01
 
