@@ -56,6 +56,37 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   tamper or cross-output substitution shifts the sighash and is
   rejected (Balance). Bench smoke: proof bytes (22400) and rows (1605)
   unchanged.
+- WG-CLSAG monerod-facing CLSAG verification (opacus-bridge,
+  `clsag_verify.rs`): a byte-compatible re-implementation of monerod's
+  `verRctCLSAGSimple` + `get_pre_mlsag_hash` on the bridge's own fe25519
+  layer, so the Ghost side cryptographically confirms the Monero legs of
+  atomic swaps (lock / claim / refund). A binary v2 tx parser covers
+  tagged key outputs (`txout_to_tagged_key`), `ecdhInfo`/`outPk` without
+  counter prefixes, Bulletproof and BulletproofPlus range proofs, and the
+  v2 tx hash = keccak(H(prefix) || H(base) || H(prunable)). Fail-closed
+  structural checks run before any crypto: canonical scalars (< l),
+  decompressible points, non-degenerate key/auxiliary images, ring size
+  >= 2, the signature buffer consumed exactly, unknown tx types rejected
+  instead of guessed. The hash-to-point is monero's elligator map
+  (`ge_fromfe_frombytes_vartime`, known-answer tested), NOT the blake3
+  try-and-increment of the v0.3 adaptor primitive; domain tags are
+  `CLSAG_agg_0` / `CLSAG_agg_1` / `CLSAG_round`. Acceptance gate: a real
+  mainnet fixture (`tests/fixtures/clsag_mainnet_v1.json`, tx
+  43bd6f459b84f14162143e28c83a0fd1d58cb8e4c328070fa79ca198a0c79a23,
+  height 3796485, 2 inputs, ring size 16, BulletproofPlus) captured
+  unpruned from monerod `get_transactions` + `get_outs` (both newly
+  exposed on xmr_rpc behind the existing Transport). The 6 fixture tests
+  pin parse round-trip with byte-exact re-serialization, honest
+  acceptance, a tamper matrix (s / c1 / D / key image / pseudoOut / ring
+  member dest+mask / range-proof bits), ring substitution with real
+  chain outs and cross-input swaps, non-canonical scalar rejection, and
+  exact buffer consumption. opacus-bridge: 67 -> 92 tests.
+- WG-CLSAG benchmark smoke (opacus-bridge, `benches/clsag_bench.rs`,
+  harness = false, no new dependencies): loads the mainnet fixture,
+  gates the run fail-closed (the honest tx must verify - full tx and
+  every input; a tampered tx must be rejected) and reports parse,
+  `pre_mlsag_hash`, per-input `verify_clsag` and full `verify_tx`
+  timings: `cargo bench -p opacus-bridge --bench clsag_bench`.
 
 ### Changed
 

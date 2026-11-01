@@ -161,11 +161,20 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   roles, blake3 hashlock.
 - `xmr_rpc.rs`: monero-wallet-rpc client (transfer with unlock_time and
   payment_id = hashlock, get_transfers filtered by payment_id, balance and
-  address queries) plus monerod get_info, behind a Transport trait.
+  address queries) plus monerod get_info, get_transactions and get_outs
+  (ring resolution over absolute key offsets), behind a Transport trait.
 - `swap_p2p.rs`: SwapNetMessage protocol with u32-LE length-prefixed JSON
   framing, tamper-evident blake3 offer ids, and a session registry that
   reuses the swap state machine as the single source of truth (replay,
   duplicate, forged-claim and timeout validation).
+- `clsag_verify.rs`: monerod-facing CLSAG verification (WG-CLSAG) - a
+  byte-compatible binary v2 tx parser, `pre_mlsag_hash` and the full
+  `verRctCLSAGSimple` equations on the own fe25519 layer, with fail-closed
+  structural checks before any crypto (canonical scalars < l,
+  non-degenerate key/auxiliary images, exact signature-buffer
+  consumption). Acceptance-tested against a real mainnet fixture (tx
+  43bd6f45..., height 3796485, ring size 16, BulletproofPlus); benchmark
+  smoke in `benches/clsag_bench.rs`.
 
 ### opacus-dex (Ethereum side)
 
@@ -242,6 +251,13 @@ cargo test -p opacus-zk --features real-prover
 # prover benchmark - full v4 spend at 2^32 leaves (real IPA):
 cargo bench -p opacus-zk --features real-prover --bench prover
 
+# CLSAG acceptance on the real mainnet fixture (tx 43bd6f45..., height
+# 3796485, ring size 16, BulletproofPlus):
+cargo test -p opacus-bridge --test clsag_verify_fixture
+
+# CLSAG benchmark smoke (fail-closed: parse + pre_mlsag_hash + verify):
+cargo bench -p opacus-bridge --bench clsag_bench
+
 # contracts (Foundry):
 forge build --root contracts
 forge test --root contracts
@@ -251,12 +267,12 @@ Test status (zero warnings in all crates):
 
 | Crate | Tests |
 |-------|-------|
-| opacus-zk | 44 default + 2 real-prover (+1 ignored mainnet-depth mock, k = 12) |
-| opacus-wallet | 14 fast + 2 mainnet-depth end-to-end (ignored by default; run with `cargo test -p opacus-wallet -- --ignored`) |
+| opacus-zk | 59 default + 2 real-prover (+1 ignored mainnet-depth mock, k = 12) |
+| opacus-wallet | 24 fast + 2 mainnet-depth end-to-end (ignored by default; run with `cargo test -p opacus-wallet -- --ignored`) |
 | opacus-consensus | 26 (real IPA proofs, depth 8) |
-| opacus-crypto | 10 |
+| opacus-crypto | 20 |
 | opacus-node | 15 |
-| opacus-bridge | 67 |
+| opacus-bridge | 92 (86 unit + 6 mainnet-fixture acceptance, tx 43bd6f45...) |
 | opacus-dex | 16 |
 | opacus-network | 80 |
 
@@ -267,7 +283,11 @@ PROVER-10S fuses 4 Poseidon rounds into every gate row, the WHOLE
 pipeline (keygen included) runs in 4,81 s cold, 2,26 s at
 steady-state prove with 0,03 s verify - inside the 10 s budget
 [S4 8] end to end. The bench gates BOTH numbers: `cargo bench -p
-opacus-zk --features real-prover --bench prover`.
+opacus-zk --features real-prover --bench prover`. The monerod-facing
+CLSAG verify path (WG-CLSAG) gates its numbers the same way: on the
+benchmark smoke a real mainnet 2-input, ring-16 BulletproofPlus tx
+parses in 0.8 us, hashes through `pre_mlsag_hash` in 3.6 us and
+verifies in about 7.3 ms (~137 tx/s).
 
 ## Sepolia deployment (zero-typing PowerShell chain)
 
@@ -328,6 +348,12 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   (closing the WG-26 R3 gap); recipients recover notes from raw
   confirmed tx bytes; consensus evidence + bench smoke (proof bytes
   and rows unchanged).
+- Delivered (WG-CLSAG): monerod-facing CLSAG verification - real
+  mainnet transactions verify byte-compat with monerod (fixture: tx
+  43bd6f45..., height 3796485, ring 16, BulletproofPlus; the tamper /
+  ring-substitution / non-canonical matrix is rejected, 92 bridge
+  tests, fail-closed benchmark smoke via `cargo bench -p opacus-bridge
+  --bench clsag_bench`).
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
