@@ -99,7 +99,8 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   hashlock H = Poseidon_3(dom_swap, s0, s1) over two 16-byte lanes of the
   swap preimage - lock derives the swap output leaf, claim reveals the
   preimage in-circuit and publishes the spent entry, refund skips the
-  preimage check (timeout enforcement is WG-27); plain spends publish a
+  preimage check (the timeout is consensus-enforced, WG-27: CLAIM only
+  while h < T, REFUND only while h >= T); plain spends publish a
   zero swap tail.
 - Real (non-mock) prover/verifier behind the `real-prover` feature: batch
   create_proof and plonk::SingleVerifier verification on
@@ -340,9 +341,18 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   (1551 -> 1605, k stays 11) - lock / claim / refund in-circuit [S4 12].
 - Delivered (WG-26): hashlock-in-circuit - swap lock / claim / refund
   proven inside the v4 spend circuit, public swap tail, v5 wire
-  [S4 12]; chain-level swap enforcement follows in WG-27. CLSAG adaptor
+  [S4 12]; chain-level swap enforcement delivered in WG-27 (see
+  below). CLSAG adaptor
   signatures for on-chain swap enforcement remain planned (Refund frames
   are notices in v0.1).
+- Delivered (WG-27): chain-level swap enforcement - CLAIM/REFUND
+  validity is a deterministic function of chain state and height
+  (confirm_v5_consensus): CLAIM only while h < T with T = H_lock +
+  W_claim (ConsensusParams.claim_timeout_blocks, testnet default 200),
+  REFUND only while h >= T with no preimage, exactly-once
+  terminalization via the open-swap registry keyed by H, unknown H
+  rejected; the WG-18 sweep mirrors the verdicts claim-strict /
+  refund-inclusive. Test matrix N1-N8 / P1-P2 in opacus-consensus.
 - Delivered (WG-29): in-transaction note encryption [S4 7] - sealed
   217-byte enotes ride the v5 wire and the v5 sighash covers them
   (closing the WG-26 R3 gap); recipients recover notes from raw

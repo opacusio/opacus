@@ -34,6 +34,34 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   every tail field; v4 parsers reject v5 bytes (no trailing-byte
   ambiguity). Wallet surface: SwapIntent (Lock / Claim / Refund),
   build_zk_spend_v5, confirm_zk_tx_v5.
+- WG-27 chain-level swap enforcement (opacus-consensus): CLAIM/REFUND
+  validity becomes a deterministic function of chain state and height,
+  checked in confirm_v5_consensus (the normative v5 accept path:
+  TxV5 parse + per-frame checks). ConsensusState gains the open-swap
+  registry swaps: BTreeMap<[u8; 32], u64> keyed by the tail hashlock H
+  (swap id = H, value = H_lock). Rules: R1 CLAIM only while h < T with
+  T = H_lock + W_claim (ConsensusParams.claim_timeout_blocks, testnet
+  default 200 = the bridge service convention; a per-swap window would
+  need a wire change and is rejected with it - the tail stays frozen at
+  130 bytes), R2 REFUND only while h >= T with no preimage, R3
+  exactly-once terminalization (the registry entry is removed on
+  CLAIM/REFUND; no terminated-set - the nullifier seen-set already
+  blocks the spent entry and an honest re-LOCK of the same H stays
+  possible), R4 unknown/not-yet-LOCKed H and duplicate LOCK rejected,
+  R5 consensus as the single source of truth (node/bridge admission may
+  only be stricter). Test matrix wg27_* pins the boundaries: CLAIM at
+  h == T rejects (N1), h > T rejects (N2); REFUND at h < T (N3) and
+  h == T - 1 (N4) reject, h == T accepts (P2); post-terminalization
+  CLAIM/REFUND reject (N5/N6); wrong preimage lanes (N7) and unknown
+  swap id (N8) reject; valid CLAIM at h < T accepts (P1). No wire
+  changes: TX_VERSION_V5, the 130-byte tail, the 21-slot layout and
+  sighash coverage stay frozen (WG-26 design v1); normative reference
+  docs/WG-27-swap-enforcement-scope.md.
+- WG-18 WP-2 (bridge/network): swap deadlines aligned with the
+  consensus verdicts [R5] - claim strict (h < T), refund inclusive
+  (h >= T), saturating timeout arithmetic; the WG-18 sweep stays a
+  fast-path convenience while the chain terminalizes (the pre-LOCK
+  fund window remains bridge-side, pre-consensus by design).
 - WG-29 enc_notes (S4 7): in-transaction note encryption, end to end.
   The v5 builder seals every output note to the recipient's note key
   (D3: note_sk = scalar(blake3("ghost_note_derive_v1" || seed)) with a
