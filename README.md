@@ -185,6 +185,19 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   adaptor holder the secret (t = s_di - s'_di, fail-closed [t]G / [t]Hp
   consistency). The adaptor block {T, T_h, R_G, R_H, di} is bilateral
   off-chain data; T never enters any challenge.
+- `xmr_swap.rs` / `swap_p2p.rs`: CLSAG adaptor swap integration
+  (WG-CLSAG-adaptor-int) - the taker pre-signs the Monero-side claim
+  spend of the locked XMR via `XmrClaimAdaptor::build` bound to the
+  swap secret t = hash_to_scalar("ghost-bridge/swap-secret-v1" ||
+  preimage) and the bilateral claim message blake3("ghost-swap/
+  xmr-claim-msg-v1" || offer_id || hashlock); the adaptor rides the
+  Claim frame as an optional serde-default sidecar (`XmrClaimSidecar`,
+  v1 frames decodable, offer ids untouched) and the maker completes it
+  with his own preimage BEFORE accepting the claim ([t]G == T binding,
+  monerod acceptance gate, completed signature stored on the session).
+  Fail-closed: an invalid sidecar rejects the frame before any state
+  transition; a Claim without the sidecar follows the v1 path.
+  Scope doc docs/WG-CLSAG-adaptor-int-scope.md.
 
 ### opacus-dex (Ethereum side)
 
@@ -384,6 +397,21 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   adaptor block {T, T_h, R_G, R_H, di} is bilateral off-chain data; the
   v5 wire stays frozen (WG-26 v1). 24-test matrix P1-P6 / N1-N18 in
   opacus-bridge; scope doc docs/WG-CLSAG-adaptor-scope.md.
+- Delivered (WG-CLSAG-adaptor-int): swap protocol integration of the
+  CLSAG adaptor - the adaptor is now a fail-closed part of the swap
+  coordination protocol. The taker pre-signs the Monero-side claim
+  spend of the locked XMR bound to the swap secret t =
+  hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage) and the
+  bilateral claim message (offer_id || hashlock); the adaptor rides the
+  Claim frame as an optional serde-default sidecar (v1 frames
+  decodable, offer ids untouched); the maker verifies it against THIS
+  swap and completes it with his own preimage ([t]G == T binding)
+  BEFORE accepting the claim - the completed signature passes the
+  unmodified monerod-compatible verify_clsag and recover_secret hands
+  the holder t from the on-chain signature. Fail-closed: an invalid
+  sidecar rejects the frame before any state transition; the v1 path
+  is unchanged. 17 new tests in opacus-bridge; scope doc
+  docs/WG-CLSAG-adaptor-int-scope.md.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

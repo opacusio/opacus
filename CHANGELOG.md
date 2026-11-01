@@ -47,6 +47,43 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   untouched; scope doc docs/WG-CLSAG-adaptor-scope.md. opacus-bridge:
   86 -> 110 lib tests (+ 6 fixture).
 
+- WG-CLSAG-adaptor-int swap protocol integration (opacus-bridge,
+  `xmr_swap.rs` + `swap_p2p.rs`): the CLSAG adaptor becomes a
+  fail-closed part of the XMR <-> GHOST swap coordination protocol,
+  closing the deferred section-6 item of the adaptor scope doc. The
+  taker pre-signs the Monero-side claim spend of the locked XMR via
+  `XmrClaimAdaptor::build` (over `sign_adaptor`) bound to the swap
+  secret t = hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage)
+  - reduced mod l by the monerod hash_to_scalar, domain-separated from
+  the hashlock and the WG-21 offer OTK - and the bilateral claim
+  message blake3("ghost-swap/xmr-claim-msg-v1" || offer_id ||
+  hashlock). The adaptor rides the existing Claim frame as an OPTIONAL
+  Frame-level sidecar `xmr_claim` (hex `XmrClaimSidecar`, serde
+  default: v1 frames decodable, old binaries ignore the field, offer
+  ids untouched); the taker attaches it in GhostLocked via
+  `attach_xmr_claim` and sends it with `publish_claim` (driving the
+  local state machine to Claimed). The maker's Claim handler verifies
+  the adaptor against THIS swap (`verify_for`: message binding + the
+  monerod challenge chain and L'/R' binding equations) and completes
+  it with his OWN preimage (`complete_xmr_claim`: `complete` enforces
+  [t]G == T) BEFORE accepting the claim - the result must pass the
+  UNMODIFIED monerod-compatible verify_clsag, the completed signature
+  is stored on the session (`xmr_completed`) and `recover_secret`
+  hands the holder t from the on-chain signature. Fail-closed
+  (WG-22 pattern): an invalid sidecar rejects the whole frame before
+  any state transition (no peer_claimed, the refund window keeps
+  running); a Claim WITHOUT the sidecar follows the v1 path unchanged;
+  the sidecar is rejected on any non-Claim frame.
+  SwapError::{MissingPreimage, XmrClaimInvalid};
+  SwapNetError::XmrClaimSidecar. 17 new tests (P1 honest loop over the
+  wire through the unmodified verifier + recover_secret round trip,
+  P2 deterministic lossless sidecar roundtrip, P4 legacy path
+  unchanged, N1-N13 tamper / substitution / binding / structural
+  matrix). Network and node layers untouched (they consume
+  SwapNet::receive_frame). Scope doc
+  docs/WG-CLSAG-adaptor-int-scope.md. opacus-bridge: 110 -> 127 lib
+  tests.
+
 ## [0.9.0] - 2026-11-01
 
 ### Added
