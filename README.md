@@ -440,6 +440,24 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   MUST NOT. Lessons: ZIP 1014/1015/1016, Monero CCS, Dash treasury,
   Decred Politeia. Open questions (%, cadence, interim custodian) go to
   the RFC. docs/gips/GIP-1-og-funding-model.md.
+- Filed (GIP-2, Status: Draft): decentralized OG/OC voting - docs-only
+  Process GIP; on activation supersedes GIP-1 section 3.1(4). The
+  Opacus-specific design problem is private balances: voting weight is
+  proven in zero knowledge from existing primitives (FcmpCircuit-style
+  membership proof against a snapshot anchor - sparse frontier root at
+  H_snap - plus an in-range value-sum proof) and a domain-separated vote
+  serial VS = Poseidon_3(vs_key, vote_rho, DOM_VS) gives one-time use per
+  proposal WITHOUT spending the voted notes (the nullifier pattern, vote
+  domain). Stage A (now): off-chain tally of ZK ballots, no consensus
+  changes, outcome recorded as GIP minutes. Stage B (later): on-chain
+  coinholder voting (ZIP 1016 analog, chain-enforced VS seen-set,
+  WG-27-style deterministic verdicts) - separate Standards Track GIP.
+  Burn-to-vote and N-of-M quorum/Key-Holder veto are REJECTED (value
+  destruction; the ZIP 1016 centralization lesson); an N-of-M multisig
+  stays only as GIP-1's interim custodian. Normative requirements R1-R7:
+  private weight, snapshot anchor, double-vote resistance, GIP proposal
+  registry, fixed windows, quorum, no silent chain changes.
+  docs/gips/GIP-2-og-oc-voting.md.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

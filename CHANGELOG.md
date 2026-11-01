@@ -113,6 +113,27 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   CCS, Dash masternode treasury, Decred Politeia. Open questions for
   the RFC window: Stage 1 percentage, payout cadence, interim
   custodian, wOPACUS treasury interaction.
+- GIP-2, decentralized OG/OC voting (docs-only,
+  `docs/gips/GIP-2-og-oc-voting.md`, Status: Draft - RFC window opens
+  on merge; supersedes GIP-1 section 3.1(4) on activation): voting
+  weight from PRIVATE balances via ZK proof-of-balance built on
+  existing primitives - FcmpCircuit-style membership proof against a
+  snapshot anchor (sparse frontier root at H_snap), in-range value-sum
+  proof, and a domain-separated vote serial VS =
+  Poseidon_3(vs_key, vote_rho, DOM_VS) for one-time use per proposal
+  WITHOUT spending the voted notes (nullifier pattern, vote domain).
+  Stage A: off-chain tally of ZK ballots, no consensus changes, outcome
+  recorded as GIP minutes. Stage B (separate Standards Track GIP):
+  on-chain coinholder voting, ZIP 1016 analog - chain-enforced VS
+  seen-set, WG-27-style deterministic verdicts. Burn-to-vote and
+  N-of-M quorum / Key-Holder veto are REJECTED; an N-of-M multisig
+  remains only GIP-1's interim custodian. Normative requirements
+  R1-R7 (private weight, snapshot anchor, double-vote resistance, GIP
+  proposal registry, fixed windows, quorum, no silent chain changes).
+  Open questions for the RFC window: snapshot cadence and pinning,
+  quorum thresholds, ballot transport (raw vs WG-29 sealed enotes),
+  post-snapshot note movement, dedicated vote circuit vs reuse of v4
+  mechanics, delegation.
 
 ## [0.9.0] - 2026-11-01
 
