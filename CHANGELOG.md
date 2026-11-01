@@ -12,6 +12,8 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-01
+
 ### Added
 
 - WG-26 swap hashlock, in-circuit (opacus-zk): a v4 spend can lock a note
