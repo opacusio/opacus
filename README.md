@@ -475,6 +475,21 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   fail-closed status-quo defaults, Stage B deadline = end of GIP-1
   epoch 3 - plus recorded known limitations and a plain-language
   summary (what is voted, who votes, what needs no vote).
+- Filed (GIP-3, Type: Standards Track (Consensus), Status: Draft): the
+  first coinbase transaction class and block-level issuance
+  enforcement - docs-only spec, RFC window opens on merge; implements
+  GIP-1 precondition E-1 and closes the v0.4 section 11 "consensus
+  issuance policy" trust boundary. New tx class v6 COINBASE (public
+  output amounts, derived zero-blinding commitments RC_j = v_j * V,
+  no inputs/proof/bind_sig, block-only validity) with the fail-closed
+  block rule sum(RC_out(coinbase)) == (block_reward(height) +
+  sum(fees)) * V; coinbase leaves enter the existing sparse frontier
+  first, no accumulator reset; 100% subsidy + fees to the miner (GIP-1
+  Stage 0 = 0% OG split preserved); activation via
+  CONSENSUS_COINBASE_ACTIVATION_HEIGHT; no coinbase maturity (would
+  require linking spent leaves to creation heights - privacy break;
+  ZK age proof left as an open question). Implementation = future
+  WG-30 after Accepted. docs/gips/GIP-3-coinbase-issuance.md.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

@@ -159,6 +159,30 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   solvable, custodial abstention). GIP-2 section 10 adds a
   non-normative plain-language summary (what is voted on, who votes,
   what does not need a vote).
+- GIP-3, coinbase transactions and issuance enforcement (docs-only
+  Standards Track (Consensus) spec,
+  `docs/gips/GIP-3-coinbase-issuance.md`, Status: Draft - RFC window
+  opens on merge; implements GIP-1 precondition E-1 and closes the
+  v0.4 spec section 11 "consensus issuance policy" trust boundary):
+  new transaction class v6 COINBASE - public output amounts, derived
+  zero-blinding value commitments RC_j = v_j * V (never transmitted),
+  no inputs / per-output RCs / fee field / proof / bind_sig, valid
+  only as tx index 0 of a block with matching height, never
+  mempool-valid; the fail-closed block issuance rule is
+  sum(RC_out(coinbase)) == (block_reward(height) + sum(fees)) * V
+  with u64 overflow rejected - any overclaim or underclaim fails the
+  equation and the block is rejected; coinbase leaves enter the
+  existing sparse frontier first (no accumulator reset); 100% of
+  subsidy + fees goes to the miner (GIP-1 Stage 0 0% OG split
+  preserved; any future split is a separate GIP after E-1/E-2/E-3
+  within caps C-1..C-5); activation via
+  CONSENSUS_COINBASE_ACTIVATION_HEIGHT ([S4 9] pattern); no coinbase
+  maturity rule (enforcement would link spent nullifiers to leaf
+  creation heights - a privacy break; reorg economics is the
+  mitigation, ZK age proof is an open question); total finite emission
+  4,199,999,997,690,000 atomic units, reward 0 from ~block 7,140,000.
+  P1-P3 / N1-N8 test matrix pinned for the future WG-30 implementation,
+  which is gated on GIP-3 Accepted status.
 
 ## [0.9.0] - 2026-11-01
 
