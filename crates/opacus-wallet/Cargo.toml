@@ -8,6 +8,18 @@ opacus-zk = { path = "../opacus-zk", features = ["real-prover"] }
 opacus-crypto = { path = "../opacus-crypto" }
 blake3.workspace = true
 thiserror.workspace = true
-
-[dev-dependencies]
 serde_json = "1"
+
+# GIP-2 WP-D1 (runbook stage R1): the two-process rehearsal bins. The
+# shared module lives beside them under src/bin/dress/ (not a target).
+[[bin]]
+name = "dress_collector"
+path = "src/bin/dress/collector.rs"
+
+[[bin]]
+name = "dress_voter"
+path = "src/bin/dress/voter.rs"
+
+[[bin]]
+name = "dress_auditor"
+path = "src/bin/dress/auditor.rs"

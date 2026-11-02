@@ -370,6 +370,52 @@ items answer the open questions of section 8 in order.
   minutes.json
   d3ba6a46d7256927824ed80726a3eb04047de7485b85d84169808c6699ec153a.
 
+  WP-D1 stage note (runbook stage R1 executed): the two-process
+  rehearsal over a drop directory is delivered as three small bins -
+  `crates/opacus-wallet/src/bin/dress/{collector,voter,auditor}.rs`
+  (shared derivation/label module `dress/common.rs`; the R0 example
+  stays byte-frozen) - plus the test layer
+  `crates/opacus-wallet/tests/dress_rehearsal_two_process.rs`. The
+  declaration is published first (`declared.json`: proposal, collector
+  key, and the rehearsal block seed 42 / 7 voters / depth 32 that lets
+  every independent voter process rebuild the anchored frontier);
+  seven independent `dress_voter` processes drop ballots as FILES -
+  the envelope file name is the hex `envelope_id`, the transport
+  dedupe key - covering 5 FOR / 1 AGAINST / 1 ABSTAIN, one raw-only
+  fallback ballot and one byte-equal raw retransmission of voter 0's
+  ballot (the collector dedupes it across transports), plus the fault
+  matrix as deliberate drops: a double vote on the same notes ->
+  `DuplicateSerial`, a dust wire smuggled over the raw fallback ->
+  `Malformed(Dust)` at the tally, a foreign-scope envelope ->
+  `ProposalMismatch`, a relabelled envelope -> `HeaderMismatch`, a
+  corrupted MAC byte -> `MacMismatch`, a truncated blob ->
+  `Truncated`, an oversized envelope -> `Oversize`, a mislabelled
+  garbage blob -> a raw-path reject. The collector ingests EVERYTHING
+  in the directory blind (arrival order = lexicographic file scan):
+  16 drops, 9 accepted entries, 6 failed events logged in the minutes,
+  nothing fatal, nothing silently dropped; the close statement is
+  Accepted (yes 58.3e9 / no 10.5e9 / abstain 12.5e9, accepted 7 /
+  rejected 2) with `result_hash`
+  9d895082ae00822a4aebac85202386eee9036d35e61f7795795b7a4daa7672d0 -
+  BYTE-EQUAL to the R0 golden vector: moving the whole protocol across
+  real serialization boundaries does not move the decision (P-5);
+  `archive_id` differs, as it must - fresh blinding bytes, a different
+  arrival history. The minutes are blake3-pinned
+  (`{minutes_body, minutes_digest}` over the canonical body): the
+  auditor replays entries -> `archive_id`, re-runs the tally (every
+  accepted proof re-verifies at mainnet depth) and the decision rule,
+  matches totals, outcome, `result_hash`, the record wire and the full
+  trace, and REJECTS a tampered minutes file (one flipped byte) before
+  any replay work. CI-budget test: the committed close artifacts
+  `crates/opacus-wallet/tests/vectors/dress-r1/` (16 drops + the
+  declaration + the minutes) replay clean and fail the two tamper
+  cases with zero proving; the full two-process flow (9 real prover
+  runs) ships as the ignored e2e test. Artifact hashes (sha256):
+  dress-r1/declared.json
+  2b87bef180edb1057be321ced582c2211f1286c874dd5e50b2c1209c799ad639;
+  dress-r1/minutes.json
+  a581c5af0bc96a4bdf0d4e3665ec3aa07291e089f5703c533f4473cfc3d35609.
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

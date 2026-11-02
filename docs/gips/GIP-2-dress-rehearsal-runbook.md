@@ -6,7 +6,8 @@ this runbook pins the staged path from "all library parts exist" to
 "the first real vote is rehearsed on testnet" - the last P-9 item.
 
 Progress: R0 EXECUTED (WP-D0 delivered - see the WP-D0 stage note in
-GIP-2 section 9); R1..R4 pending.
+GIP-2 section 9); R1 EXECUTED (WP-D1 delivered - see the WP-D1 stage
+note in GIP-2 section 9); R2..R4 pending.
 
 Every stage has an executable definition of done. Stages R0 and R1
 need only new harness code in opacus-wallet; no node changes. Stages
@@ -88,7 +89,9 @@ Definition of done: exit 0; golden files committed under
 `crates/opacus-wallet/tests/vectors/`; a `#[test]` replays them;
 CI 4/4.
 
-## 2. Stage R1 - two-process rehearsal over a drop directory
+## 2. Stage R1 - two-process rehearsal over a drop directory (EXECUTED:
+    WP-D1, three bins delivered, the committed drop-dir run replays
+    clean and rejects a tampered minutes file)
 
 Goal: exercise the real serialization boundaries (files, not fn
 calls) with zero node work. The transport profile is
