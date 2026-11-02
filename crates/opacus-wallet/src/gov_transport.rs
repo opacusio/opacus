@@ -660,7 +660,10 @@ mod tests {
         assert_eq!(rec_a.result_hash, rec_c.result_hash);
         assert_eq!(rec_a.outcome, rec_c.outcome);
         assert_eq!(rec_a.accepted, 3);
-        assert_eq!((rec_a.yes, rec_a.no, rec_a.abstain), (3_000_000, 2_000_000, 1_500_000));
+        assert_eq!(
+            (rec_a.yes, rec_a.no, rec_a.abstain),
+            (3_000_000, 2_000_000, 1_500_000)
+        );
         // Envelope headers and raw bytes both scoped to the archive:
         // nothing leaked across proposals.
         assert_eq!(published_a.entries.len(), 3);
