@@ -537,6 +537,36 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   reverse-order replay, sub-60% rejection, all-ABSTAIN NoQuorum,
   process majority, blinding/order independence) + the consensus
   denominator sync test.
+- Delivered (GIP-2 WP-3): the WG-29 ballot transport profile plus the
+  raw fallback (P-4) - additive `crates/opacus-wallet/src/gov_transport.rs`
+  + the tag-parameterization completion of the WG-29 ECIES
+  (`crates/opacus-crypto/src/ecies.rs`: `BALLOT_TAGS`, `BALLOT_DERIVE_TAG`,
+  `keypair_from_seed_tagged`, variable-length `seal_with_tags` /
+  `open_with_tags`; one algebra - the fixed-size enote paths delegate
+  byte-identically, existing tests are the regression gate). Primary
+  transport: the `GBE1` envelope - the canonical ballot wire sealed to the
+  per-proposal ballot collector key (derived from the collector's BIP-39
+  seed, no new trust root), proposal tag `(gip, transition, h_open)` in
+  cleartext for bucket routing (relabelled envelopes fail closed on the
+  ballot-header match; cross-tag isolation vs the enote instantiation is
+  tested). Fallback: raw publication of the canonical ballot bytes -
+  documented weaker (choice/weight/serials public before close; copying is
+  useless for double-voting, R-3). The collector-side `BallotArchive`
+  ingests BOTH transports, dedupes only byte-equal retransmissions and
+  takes NO cryptographic verdicts - the tally trace stays the single
+  source of rejections, so the minutes are complete and auditable (a
+  sub-T_min or double-vote attempt is archived and shows up in the
+  published trace). Close artifacts: `archive_id` fingerprints the
+  minutes in ARRIVAL order, the tally `result_hash` is order-invariant -
+  different arrival orders, same decision hash (tested both ways).
+  Tests: 9 new wallet tests (seal/open roundtrip with randomized
+  envelope ids, wrong-key + tamper matrix, relabelled-envelope and
+  cross-tag fail-closed, raw roundtrip, sealed-vs-raw transport
+  neutrality with the same result hash and weight totals, retransmission
+  dedupe + double-vote attempt kept in the minutes, archive scope and
+  proposal mismatch, blind-archive + tally-Dust replay) + 4 new crypto
+  tests (variable-length roundtrip, cross-instantiation isolation,
+  tagged-derivation equivalence, short/tampered rejection).
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

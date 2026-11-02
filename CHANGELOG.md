@@ -159,6 +159,58 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   solvable, custodial abstention). GIP-2 section 10 adds a
   non-normative plain-language summary (what is voted on, who votes,
   what does not need a vote).
+- GIP-2 WP-3, the WG-29 ballot transport profile plus the raw fallback
+  (third CODE deliverable of the GIP-2 RFC window; P-4;
+  `crates/opacus-wallet/src/gov_transport.rs` +
+  `crates/opacus-crypto/src/ecies.rs`, additive - no existing wallet,
+  circuit, wire, network or consensus file changes semantics). The
+  crypto side completes the WG-29 ECIES tag-parameterization:
+  `BALLOT_TAGS` (a third domain-separated instantiation next to the N3
+  note feed and the in-transaction enote), `BALLOT_DERIVE_TAG` +
+  `keypair_from_seed_tagged` (the ballot collector key is a derivation
+  of the collector's BIP-39 seed - no new trust root, GIP-2 section 7),
+  and variable-length `seal_with_tags` / `open_with_tags` (the
+  fixed-size enote paths delegate to the same core byte-identically;
+  the existing enote test suite is the regression gate). The primary
+  transport is the `GBE1` ballot envelope: magic + version + the
+  proposal tag `(gip, transition, h_open)` in CLEARTEXT (public by
+  construction, P-3 - enables bucket routing without opening) + the
+  WG-29 sealed blob `epk 32 || nonce 16 || ct || mac 32` over the
+  canonical ballot wire, with a 256 KiB profile cap on the parse path.
+  Envelope semantics: the cleartext tag MUST match the ballot header
+  after opening (relabelled envelopes fail closed,
+  `HeaderMismatch`); the envelope id is the WG-29 id digest under the
+  ballot tags - the v5 gossip relay dedupe key (randomized per seal,
+  stable per byte-string); wiring the gossip channel is
+  node-integration work outside the profile. The fallback transport
+  is raw publication of the canonical ballot bytes - documented
+  WEAKER (choice, weight and serials are public before close; copying
+  stays useless for double-voting because serials are one-time
+  tokens, R-3). The collector-side `BallotArchive` is the auditable
+  minutes of P-4: per-proposal scope, ingests BOTH transports, checks
+  parse + scope only, dedupes ONLY byte-equal retransmissions, and
+  deliberately performs NO cryptographic verification - every verdict
+  (shape, dust, anchor, proposal, ZK proof, binding signature,
+  duplicate serials) belongs to the tally engine's published trace
+  (`crate::tally::tally`), so rejected and duplicate-vote attempts
+  stay visible in the minutes instead of being silently filtered.
+  Close artifacts: `publish()` emits the entries (canonical ballot
+  wires in arrival order, directly consumable by the WP-2 tally) plus
+  `archive_id` - blake3 over the per-entry digests in ARRIVAL order;
+  the minutes fingerprint their submission history while the tally
+  `result_hash` stays order-invariant (different arrival orders =>
+  different `archive_id`, SAME `result_hash`). Tests: opacus-wallet 9
+  new (ballot-key tag separation, seal/open roundtrip with randomized
+  envelope ids, wrong-key + tamper + magic/version/truncation/oversize
+  matrix, relabelled-envelope and cross-tag fail-closed, raw fallback
+  roundtrip, sealed-vs-raw transport neutrality - same result hash and
+  weight totals from differently ordered archives, retransmission
+  dedupe with a double-vote attempt kept in the minutes and rejected
+  as DuplicateSerial by the tally, archive-scope and proposal
+  mismatch, blind-archive + tally-Dust replay) and opacus-crypto 4 new
+  (variable-length roundtrip incl. the empty plaintext, ballot/enote
+  cross-instantiation isolation, tagged-derivation equivalence with
+  `note_keypair_from_seed`, short + tampered rejection matrix).
 - GIP-2 WP-2, the deterministic Stage A tally engine (second CODE
   deliverable of the GIP-2 RFC window; `crates/opacus-wallet/src/tally.rs`,
   additive - no existing wallet, circuit, wire or consensus file changes

@@ -305,6 +305,36 @@ items answer the open questions of section 8 in order.
   rule is P-6 verbatim, fail-closed on quorum, ties and degenerate
   denominators.
 
+  WP-3 delivery note (RFC window): the P-4 transport profile is
+  delivered as `crates/opacus-wallet/src/gov_transport.rs` plus the
+  additive tag-parameterization completion of the WG-29 ECIES
+  (`crates/opacus-crypto/src/ecies.rs`: `BALLOT_TAGS`,
+  `BALLOT_DERIVE_TAG`, `keypair_from_seed_tagged`, variable-length
+  `seal_with_tags` / `open_with_tags` - one algebra, the fixed-size
+  enote paths delegate byte-identically and their existing test suite
+  is the regression gate). The primary transport is the `GBE1`
+  envelope: the canonical ballot wire sealed to the per-proposal
+  ballot collector key (a derivation of the collector's BIP-39 seed -
+  no new trust root, section 7) with the proposal tag
+  `(gip, transition, h_open)` in cleartext (public by P-3; enables
+  bucket routing without opening; a relabelled envelope fails closed
+  on the ballot-header match). The fallback is raw publication of the
+  canonical ballot bytes - documented weaker: the choice, the weight
+  and the serials are public before close, while copying stays
+  useless for double-voting (one-time serials, R-3). The
+  collector-side `BallotArchive` takes BOTH transports, dedupes only
+  byte-equal retransmissions and deliberately performs NO
+  cryptographic verification - every verdict belongs to the tally
+  engine's published trace, so the minutes stay COMPLETE (rejected
+  and duplicate-vote attempts are visible and auditable, not silently
+  filtered). `archive_id` fingerprints the minutes in ARRIVAL order;
+  the tally `result_hash` stays order-invariant - two published
+  copies with different arrival order have different `archive_id`
+  and the SAME `result_hash` (both are the close artifacts of step
+  5). Envelope ids (the WG-29 id digest under the ballot tags) are
+  defined for v5 gossip relay dedupe; wiring the gossip channel is
+  node-integration work, not part of this profile.
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

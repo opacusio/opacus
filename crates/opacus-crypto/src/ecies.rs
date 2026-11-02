@@ -68,6 +68,23 @@ pub const ENOTE_TAGS: EciesTags = EciesTags {
     id_tag: b"ghost-encnote-id-v1",
 };
 
+/// GIP-2 WP-3 ballot transport tags (P-4): the WG-29 envelope
+/// instantiation that seals a governance ballot to the per-proposal
+/// ballot collector key. Same algebra, disjoint keys and tags - a
+/// ballot envelope never opens as an enote and vice versa (tested).
+pub const BALLOT_TAGS: EciesTags = EciesTags {
+    ks_context: "ghost-ballot-v1 keystream",
+    mac_context: "ghost-ballot-v1 mac",
+    ks_block_tag: b"ghost-ballot-ks-v1",
+    mac_tag: b"ghost-ballot-mac-v1",
+    id_tag: b"ghost-ballot-id-v1",
+};
+
+/// Derivation tag of the ballot collector key from the BIP-39 seed
+/// (GIP-2 WP-3): `ballot_sk = scalar(blake3(BALLOT_DERIVE_TAG || seed))`,
+/// the D3 pattern with its own domain tag.
+pub const BALLOT_DERIVE_TAG: &[u8] = b"ghost_ballot_derive_v1";
+
 // ---------------------------------------------------------------------------
 // Core algebra (byte-compatible with the legacy notes.rs construction)
 // ---------------------------------------------------------------------------
@@ -183,20 +200,28 @@ impl NoteSecret {
     }
 }
 
-/// Derive the wallet note keypair from the 64-byte BIP-39 seed (D3):
-/// `note_sk = scalar(blake3("ghost_note_derive_v1" || seed))` with the
-/// canonical reduction (64-byte blake3 XOF squeeze -> mod l),
-/// `note_pk = [note_sk] * RISTRETTO_BASEPOINT_POINT` (see
-/// [`NoteSecret::public`]). Deterministic in the seed.
-pub fn note_keypair_from_seed(seed: &[u8; 64]) -> NoteSecret {
+/// Derive a tagged ECIES recipient keypair from the 64-byte BIP-39 seed:
+/// `sk = scalar(blake3(tag || seed))` with the canonical reduction
+/// (64-byte blake3 XOF squeeze -> mod l), `pk = [sk] * BASEPOINT` (see
+/// [`NoteSecret::public`]). Deterministic in (tag, seed). The note key
+/// ([`note_keypair_from_seed`]) and the ballot collector key
+/// ([`BALLOT_DERIVE_TAG`]) are the two protocol instantiations.
+pub fn keypair_from_seed_tagged(tag: &[u8], seed: &[u8; 64]) -> NoteSecret {
     let mut h = blake3::Hasher::new();
-    h.update(NOTE_DERIVE_TAG);
+    h.update(tag);
     h.update(seed);
     let mut squeeze = [0u8; 64];
     h.finalize_xof().fill(&mut squeeze);
     let scalar = Scalar::from_bytes_mod_order_wide(&squeeze);
     squeeze.zeroize();
     NoteSecret(scalar.to_bytes())
+}
+
+/// Derive the wallet note keypair from the 64-byte BIP-39 seed (D3):
+/// `note_sk = scalar(blake3("ghost_note_derive_v1" || seed))`.
+/// Deterministic in the seed.
+pub fn note_keypair_from_seed(seed: &[u8; 64]) -> NoteSecret {
+    keypair_from_seed_tagged(NOTE_DERIVE_TAG, seed)
 }
 
 // ---------------------------------------------------------------------------
@@ -325,47 +350,80 @@ pub fn seal_enote(
     seal_enote_with(note, recipient_pk, &e, &nonce)
 }
 
+/// Deterministic seal core with explicit tags, ephemeral scalar and
+/// nonce (every public seal path delegates here, so there is exactly
+/// ONE algebra - D5). Wire: `epk 32 || nonce 16 || ct || mac 32`.
+fn seal_blob_with_tags(
+    tags: &EciesTags,
+    version: u32,
+    plaintext: &[u8],
+    recipient_pk: &CompressedRistretto,
+    e: &Scalar,
+    nonce: &[u8; 16],
+) -> Result<Vec<u8>, EnoteError> {
+    let pt = recipient_pk
+        .decompress()
+        .ok_or(EnoteError::BadRecipientKey)?;
+    let epk = (e * RISTRETTO_BASEPOINT_POINT).compress();
+    let shared = (e * pt).compress();
+    let (k_enc, k_mac) = session_keys(
+        tags,
+        epk.as_bytes(),
+        recipient_pk.as_bytes(),
+        shared.as_bytes(),
+        nonce,
+    );
+    let ks = keystream(tags, &k_enc, nonce, plaintext.len());
+    let ct: Vec<u8> = plaintext
+        .iter()
+        .zip(ks.iter())
+        .map(|(a, b)| a ^ b)
+        .collect();
+    let mac = mac_of(tags, &k_mac, version, epk.as_bytes(), nonce, &ct);
+    let mut out = Vec::with_capacity(32 + 16 + plaintext.len() + 32);
+    out.extend_from_slice(epk.as_bytes());
+    out.extend_from_slice(nonce);
+    out.extend_from_slice(&ct);
+    out.extend_from_slice(&mac);
+    Ok(out)
+}
+
 /// Deterministic seal with explicit ephemeral scalar and nonce (used by
-/// tests and by callers that own the randomness).
+/// tests and by callers that own the randomness). Byte-identical to the
+/// pre-generalization construction (the fixed-size test suite is the
+/// regression gate).
 pub fn seal_enote_with(
     note: &EnoteV1,
     recipient_pk: &CompressedRistretto,
     e: &Scalar,
     nonce: &[u8; 16],
 ) -> Result<[u8; ENOTE_BLOB_LEN], EnoteError> {
-    let pt = recipient_pk
-        .decompress()
-        .ok_or(EnoteError::BadRecipientKey)?;
-    let payload = note.encode();
-    let epk = (e * RISTRETTO_BASEPOINT_POINT).compress();
-    let shared = (e * pt).compress();
-    let (k_enc, k_mac) = session_keys(
+    let blob = seal_blob_with_tags(
         &ENOTE_TAGS,
-        epk.as_bytes(),
-        recipient_pk.as_bytes(),
-        shared.as_bytes(),
-        nonce,
-    );
-    let ks = keystream(&ENOTE_TAGS, &k_enc, nonce, ENOTE_PLAINTEXT_LEN);
-    let ct: Vec<u8> = payload.iter().zip(ks.iter()).map(|(a, b)| a ^ b).collect();
-    let mac = mac_of(
-        &ENOTE_TAGS,
-        &k_mac,
         u32::from(ENOTE_VERSION),
-        epk.as_bytes(),
+        &note.encode(),
+        recipient_pk,
+        e,
         nonce,
-        &ct,
-    );
+    )?;
     let mut out = [0u8; ENOTE_BLOB_LEN];
-    let mut o = 0;
-    out[o..o + 32].copy_from_slice(epk.as_bytes());
-    o += 32;
-    out[o..o + 16].copy_from_slice(nonce);
-    o += 16;
-    out[o..o + ENOTE_PLAINTEXT_LEN].copy_from_slice(&ct);
-    o += ENOTE_PLAINTEXT_LEN;
-    out[o..o + 32].copy_from_slice(&mac);
+    out.copy_from_slice(&blob);
     Ok(out)
+}
+
+/// Tag-parameterized variable-length seal with fresh randomness: the
+/// ballot transport primitive (GIP-2 WP-3 seals a ballot wire to the
+/// collector key with [`BALLOT_TAGS`]).
+pub fn seal_with_tags(
+    tags: &EciesTags,
+    version: u32,
+    plaintext: &[u8],
+    recipient_pk: &CompressedRistretto,
+) -> Result<Vec<u8>, EnoteError> {
+    let mut nonce = [0u8; 16];
+    OsRng.fill_bytes(&mut nonce);
+    let e = Scalar::random(&mut OsRng);
+    seal_blob_with_tags(tags, version, plaintext, recipient_pk, &e, &nonce)
 }
 
 /// Open a sealed enote with the local note secret (D4). Order: exact
@@ -373,6 +431,50 @@ pub fn seal_enote_with(
 /// and only then decryption and the strict codec check.
 pub fn open_enote(blob: &[u8], sk: &NoteSecret) -> Result<EnoteV1, EnoteError> {
     open_enote_with_tags(&ENOTE_TAGS, blob, sk)
+}
+
+/// Tag-parameterized variable-length open: exact inverse of
+/// [`seal_with_tags`] (and of the deterministic core). Order: exact
+/// minimum length, structural parse, MAC (constant-time blake3 Hash
+/// equality), and only then decryption.
+pub fn open_with_tags(
+    tags: &EciesTags,
+    version: u32,
+    blob: &[u8],
+    sk: &NoteSecret,
+) -> Result<Vec<u8>, EnoteError> {
+    const OVERHEAD: usize = 32 + 16 + 32;
+    if blob.len() < OVERHEAD {
+        return Err(EnoteError::BadLength {
+            what: "sealed blob",
+            got: blob.len(),
+        });
+    }
+    let ct_len = blob.len() - OVERHEAD;
+    let mut epk_b = [0u8; 32];
+    epk_b.copy_from_slice(&blob[0..32]);
+    let mut nonce = [0u8; 16];
+    nonce.copy_from_slice(&blob[32..48]);
+    let ct = &blob[48..48 + ct_len];
+    let mut mac = [0u8; 32];
+    mac.copy_from_slice(&blob[48 + ct_len..]);
+    let epk_pt = CompressedRistretto(epk_b)
+        .decompress()
+        .ok_or(EnoteError::BadEphemeralKey)?;
+    let shared = (sk.scalar() * epk_pt).compress();
+    let (k_enc, k_mac) = session_keys(
+        tags,
+        &epk_b,
+        sk.public().as_bytes(),
+        shared.as_bytes(),
+        &nonce,
+    );
+    let want = mac_of(tags, &k_mac, version, &epk_b, &nonce, ct);
+    if blake3::Hash::from_bytes(want) != blake3::Hash::from_bytes(mac) {
+        return Err(EnoteError::MacMismatch);
+    }
+    let ks = keystream(tags, &k_enc, &nonce, ct_len);
+    Ok(ct.iter().zip(ks.iter()).map(|(a, b)| a ^ b).collect())
 }
 
 /// Tag-parameterized open (the cross-tag isolation test proves the same
@@ -388,30 +490,7 @@ pub fn open_enote_with_tags(
             got: blob.len(),
         });
     }
-    let mut epk_b = [0u8; 32];
-    epk_b.copy_from_slice(&blob[0..32]);
-    let mut nonce = [0u8; 16];
-    nonce.copy_from_slice(&blob[32..48]);
-    let ct = &blob[48..48 + ENOTE_PLAINTEXT_LEN];
-    let mut mac = [0u8; 32];
-    mac.copy_from_slice(&blob[48 + ENOTE_PLAINTEXT_LEN..]);
-    let epk_pt = CompressedRistretto(epk_b)
-        .decompress()
-        .ok_or(EnoteError::BadEphemeralKey)?;
-    let shared = (sk.scalar() * epk_pt).compress();
-    let (k_enc, k_mac) = session_keys(
-        tags,
-        &epk_b,
-        sk.public().as_bytes(),
-        shared.as_bytes(),
-        &nonce,
-    );
-    let want = mac_of(tags, &k_mac, u32::from(ENOTE_VERSION), &epk_b, &nonce, ct);
-    if blake3::Hash::from_bytes(want) != blake3::Hash::from_bytes(mac) {
-        return Err(EnoteError::MacMismatch);
-    }
-    let ks = keystream(tags, &k_enc, &nonce, ENOTE_PLAINTEXT_LEN);
-    let plain: Vec<u8> = ct.iter().zip(ks.iter()).map(|(a, b)| a ^ b).collect();
+    let plain = open_with_tags(tags, u32::from(ENOTE_VERSION), blob, sk)?;
     EnoteV1::decode(&plain)
 }
 
@@ -558,5 +637,81 @@ mod tests {
             assert!(ENOTE_BLOB_LEN <= 512);
             assert!(ENOTE_BLOB_LEN <= 1024);
         };
+    }
+
+    // -----------------------------------------------------------------
+    // GIP-2 WP-3: the ballot transport instantiation (BALLOT_TAGS)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn ballot_tags_variable_length_roundtrip() {
+        let sk = note_keypair_from_seed(&fixed_seed(51));
+        let mut pt = Vec::with_capacity(1000);
+        for i in 0..1000u32 {
+            pt.push((i % 251) as u8);
+        }
+        let blob = seal_with_tags(&BALLOT_TAGS, 1, &pt, &sk.public()).unwrap();
+        assert_eq!(blob.len(), 32 + 16 + 1000 + 32);
+        assert_eq!(open_with_tags(&BALLOT_TAGS, 1, &blob, &sk).unwrap(), pt);
+        // Wrong version byte of the MAC input -> MAC mismatch.
+        assert_eq!(
+            open_with_tags(&BALLOT_TAGS, 2, &blob, &sk),
+            Err(EnoteError::MacMismatch)
+        );
+        // Empty plaintext is structurally legal at the primitive level.
+        let empty = seal_with_tags(&BALLOT_TAGS, 1, &[], &sk.public()).unwrap();
+        assert_eq!(empty.len(), 80);
+        assert_eq!(
+            open_with_tags(&BALLOT_TAGS, 1, &empty, &sk).unwrap(),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn ballot_and_enote_instantiations_do_not_cross() {
+        let sk = note_keypair_from_seed(&fixed_seed(52));
+        let ballot_sk = keypair_from_seed_tagged(BALLOT_DERIVE_TAG, &fixed_seed(52));
+        // The derivation tags are domain-separated: same seed, different
+        // keys.
+        assert_ne!(sk.public(), ballot_sk.public());
+        let pt = [7u8; 137];
+        let ballot_blob = seal_with_tags(&BALLOT_TAGS, 1, &pt, &ballot_sk.public()).unwrap();
+        // ENOTE tags reject the ballot blob (and the fixed-size guard
+        // rejects the length first - both fail closed).
+        assert!(open_enote_with_tags(&ENOTE_TAGS, &ballot_blob, &ballot_sk).is_err());
+        // The ballot tags reject an enote blob.
+        let enote_blob = seal_enote(&sample_note(), &sk.public()).unwrap();
+        assert_eq!(
+            open_with_tags(&BALLOT_TAGS, 1, &enote_blob, &sk),
+            Err(EnoteError::MacMismatch)
+        );
+    }
+
+    #[test]
+    fn tagged_keypair_matches_the_note_derivation() {
+        let a = keypair_from_seed_tagged(NOTE_DERIVE_TAG, &fixed_seed(53));
+        let b = note_keypair_from_seed(&fixed_seed(53));
+        assert_eq!(a.public(), b.public());
+    }
+
+    #[test]
+    fn variable_length_open_rejects_short_and_tampered() {
+        let sk = note_keypair_from_seed(&fixed_seed(54));
+        let blob = seal_with_tags(&BALLOT_TAGS, 1, &[1u8; 200], &sk.public()).unwrap();
+        assert_eq!(
+            open_with_tags(&BALLOT_TAGS, 1, &blob[..79], &sk),
+            Err(EnoteError::BadLength {
+                what: "sealed blob",
+                got: 79
+            })
+        );
+        for flip in [0usize, 40, 100, blob.len() - 1] {
+            let mut t = blob.clone();
+            t[flip] ^= 1;
+            assert!(
+                open_with_tags(&BALLOT_TAGS, 1, &t, &sk).is_err(),
+                "flip {flip}"
+            );
+        }
     }
 }
