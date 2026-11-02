@@ -159,6 +159,56 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   solvable, custodial abstention). GIP-2 section 10 adds a
   non-normative plain-language summary (what is voted on, who votes,
   what does not need a vote).
+- GIP-2 WP-2, the deterministic Stage A tally engine (second CODE
+  deliverable of the GIP-2 RFC window; `crates/opacus-wallet/src/tally.rs`,
+  additive - no existing wallet, circuit, wire or consensus file changes
+  semantics; the only touch elsewhere is a `Clone` derive on `GovError`):
+  processes the published ballot archive (GIP-2 3.2 step 4 / P-5) in
+  CANONICAL ORDER - entries sorted by ballot bytes, byte-equal copies
+  keeping submission order - so the accepted set, the weight totals and
+  the result hash are independent of the archive arrival order: the P-5
+  replay guarantee. Per ballot: strict canonical parse, the DECLARED
+  anchor gate FIRST (P-3 fail-closed: the archived H_snap frontier root
+  stands; a stale or foreign snapshot is reported as such), the declared
+  proposal identity (gip / transition / h_open / derived proposal), full
+  standalone verification (shape, T_min = 10^6 dust floor, the ZK
+  proof-of-balance over instances reconstructed from the fields alone,
+  the binding signature - the milliseconds-per-ballot budget of P-5) and
+  one-vote-per-serial over a SeenSet (R-3; the same-note-same-proposal
+  VS determinism of WP-1 makes a plain seen-set sufficient).
+  Per-ballot rejection is TRACEABILITY, not a fatal error: every archive
+  entry gets a verdict line - accepted / Malformed(GovError) /
+  ProposalMismatch / AnchorMismatch / DuplicateSerial - with the sighash
+  when the bytes parse. The decision rule is P-6 verbatim (u128
+  internals, no overflow paths): quorum 5% of the emission denominator
+  for fund decisions and 2% for process transitions with ABSTAIN
+  counting toward participation only, approval 60% of YES+NO weight for
+  fund decisions and simple majority for process votes (an exact tie
+  rejects, fail-closed); quorum not met = NoQuorum = status quo
+  persists; a zero denominator (H_open = 0) and an all-ABSTAIN quorum
+  approve nothing. The public quorum denominator `emission_upto(h) =
+  sum(block_reward(0..h))` (P-5) is the closed form over the halving
+  eras mirroring `opacus_consensus::block::block_reward` - the wallet
+  cannot depend on consensus without a dependency cycle (consensus
+  already depends on the wallet), so the consensus-side sync test
+  `crates/opacus-consensus/tests/gov_emission_sync.rs` pins the two
+  implementations together at 17 heights (an emission-schedule change is
+  a Standards Track GIP (R-7) and MUST touch both). The published
+  `TallyRecord` (canonical wire, strict parse, exact length) commits via
+  blake3 `result_hash` to the declared parameters, the weight totals and
+  the sorted sighashes of the ACCEPTED ballots ONLY: halo2 blinding
+  never enters the hash, so two independent runs over the same archive
+  produce the SAME result hash (the golden-vector property), and
+  rejected entries are trace metadata, not hash inputs.
+  Tests: opacus-wallet 8 new (emission golden values incl. era
+  boundaries and the 34-era convergence, the hand-computed P-6 decision
+  matrix with exact-boundary cases incl. the all-ABSTAIN quorum and the
+  degenerate denominator, record wire roundtrip with strict framing, a
+  fund vote end-to-end with the full 7-entry rejection trace plus
+  reverse-order replay equality, fund rejection below 60% despite
+  quorum, all-ABSTAIN NoQuorum, process majority in both directions
+  plus class-as-hash-input, and blinding/order independence of the
+  result hash) and opacus-consensus 1 (the denominator sync guard).
 - GIP-2 WP-1, the Stage A governance ballot builder (first CODE
   deliverable of the GIP-2 RFC window; `crates/opacus-zk/src/vote.rs` +
   `crates/opacus-wallet/src/gov.rs`, additive - no existing circuit,

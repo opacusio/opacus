@@ -6,4 +6,5 @@ license.workspace = true
 [dependencies]
 opacus-zk = { path = "../opacus-zk", features = ["real-prover"] }
 opacus-crypto = { path = "../opacus-crypto" }
+blake3.workspace = true
 thiserror.workspace = true

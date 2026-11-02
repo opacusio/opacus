@@ -82,7 +82,7 @@ impl Choice {
 // ---------------------------------------------------------------------------
 
 /// Errors from the ballot pipeline.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum GovError {
     /// Ballot shape violation (note count, index/notes mismatch).
     Topology(String),

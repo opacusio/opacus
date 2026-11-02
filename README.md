@@ -511,6 +511,32 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   duplicate VS, foreign anchor, stale snapshot, dust, choice-flip tamper,
   cross-proposal unlinkability. docs/gips/GIP-2-og-oc-voting.md sections
   6/9 updated by the same delivery.
+- Delivered (GIP-2 WP-2): the deterministic Stage A tally engine -
+  additive `crates/opacus-wallet/src/tally.rs`. The published ballot
+  archive is processed in canonical order (sorted by ballot bytes), so
+  the outcome is independent of arrival order - the GIP-2 P-5 replay
+  guarantee: anyone re-tallying the archive gets the SAME result hash.
+  Every ballot passes the declared-anchor gate (P-3 fail-closed: the
+  archived H_snap frontier root stands), the declared proposal identity,
+  full standalone verification (dust floor, ZK proof-of-balance, binding
+  signature) and the SeenSet duplicate-VS check (R-3); rejections are
+  per-ballot trace lines (Malformed / ProposalMismatch / AnchorMismatch
+  / DuplicateSerial), never fatal. The decision rule is P-6 verbatim:
+  quorum 5% (fund) / 2% (process) of the emission denominator
+  `emission_upto(h) = sum(block_reward(0..h))`, approval 60% of YES+NO
+  (fund) / simple majority (process, a tie rejects), ABSTAIN counts
+  toward participation only, NoQuorum = status quo (fail-closed). The
+  denominator mirrors `opacus_consensus::block::block_reward` and is
+  pinned to it by a consensus-side sync test (the wallet cannot depend
+  on consensus without a dependency cycle). The published TallyRecord
+  (canonical wire) commits via blake3 to the parameters, totals and
+  sorted sighashes of the ACCEPTED ballots - proof blinding never
+  enters the hash, so independent runs are byte-stable golden vectors.
+  Tests: 8 new wallet tests (golden emission values, hand-computed P-6
+  boundary matrix, wire roundtrip, full-rejection-trace fund vote +
+  reverse-order replay, sub-60% rejection, all-ABSTAIN NoQuorum,
+  process majority, blinding/order independence) + the consensus
+  denominator sync test.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 

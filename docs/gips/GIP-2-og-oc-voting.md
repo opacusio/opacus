@@ -157,7 +157,19 @@ and stale-snapshot gates, the `T_min` dust floor and the K <= 8
 topology bound, canonical wire roundtrip with choice-flip signature
 binding and no-trailing-bytes parsing, cross-proposal serial/key
 unlinkability, and the row budget (K = 8 at DEPTH = 32 -> k = 13). The
-future vote-circuit / Stage B work packages MUST still include a P/N
+WP-2 tally engine carries the Stage A tally matrix in
+`opacus-wallet::tally`: golden emission-denominator values (era
+boundaries, the 34-era convergence), the hand-computed P-6 decision
+matrix with exact quorum/approval boundaries (including the all-ABSTAIN
+quorum and the degenerate zero denominator), the record wire roundtrip
+with strict framing, an end-to-end fund vote with the full per-ballot
+rejection trace (duplicate serial, wrong GIP, foreign anchor, dust) and
+its reverse-order replay equality, sub-60% rejection despite quorum,
+process-majority both directions with the class byte as a hash input,
+and blinding/order independence of the result hash; the emission
+denominator is pinned to the consensus schedule by a consensus-side
+sync test. The future vote-circuit / Stage B work packages MUST still
+include a P/N
 test matrix covering: weight under-valuation attempts, cross-proposal
 `VS` reuse at chain level, non-canonical encodings, and degenerate
 keys (the WG-CLSAG tamper-matrix convention).
@@ -277,6 +289,21 @@ items answer the open questions of section 8 in order.
   file changes semantics (visibility-only `pub(crate)` upgrades).
   Measured row budget: K = 8 at DEPTH = 32 -> k = 13, matching the
   P-2 estimate; the ~10 s proving envelope holds.
+
+  WP-2 delivery note (RFC window): the deterministic tally engine is
+  delivered as `crates/opacus-wallet/src/tally.rs` (ordinary software,
+  as section 4 anticipated). The archive is processed in canonical
+  order (sorted by ballot bytes), so the published result hash is
+  independent of arrival order and any replay over the same archive
+  reproduces it byte-for-byte; proof blinding is excluded from the
+  hash. Rejections are per-ballot trace lines, never fatal (step 4 of
+  section 3.2). The P-5 denominator `sum(block_reward(0..H_snap))` is
+  implemented in the wallet and pinned to the consensus schedule by a
+  consensus-side sync test (a wallet->consensus dependency is
+  impossible without a cycle; an emission-schedule change is a
+  Standards Track GIP (R-7) and touches both). The engine's decision
+  rule is P-6 verbatim, fail-closed on quorum, ties and degenerate
+  denominators.
 
 ## 10. Plain-language summary (non-normative)
 
