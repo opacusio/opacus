@@ -198,7 +198,9 @@ from R0 keep the engine byte-pinned in CI.
 - `cargo fmt --all -- --check`, `cargo clippy --workspace
   --all-targets -- -D warnings`, full workspace tests green.
 - New code ships with tests; harness output committed as artifacts.
-- `git grep ghp_ HEAD` exits 1 before every push.
+- the secret scan (grep the committed HEAD tree for the GitHub PAT
+  prefix, `g h p _` without spaces) has zero matches before every
+  push; run it AFTER the commit, against HEAD itself.
 - CI 4/4 (cargo-deny, RustSec, Rust workspace, Foundry) on every
   pushed stage commit.
 - Stage notes appended to the GIP-2 delivery section (P-9 line)
