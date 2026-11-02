@@ -1533,7 +1533,7 @@ impl SpendConfig {
     }
 
     /// One fixed-domain Poseidon permutation.
-    fn perm(
+    pub(crate) fn perm(
         &self,
         region: &mut Region<'_, Fp>,
         base: usize,
@@ -1545,7 +1545,7 @@ impl SpendConfig {
     }
 
     /// One witness-domain Poseidon permutation (the key chain).
-    fn perm_wd(
+    pub(crate) fn perm_wd(
         &self,
         region: &mut Region<'_, Fp>,
         base: usize,
@@ -1560,7 +1560,7 @@ impl SpendConfig {
     /// One commutative tree step: `node' = H_tree(node, sib)` with the
     /// linear/quadratic operand gates tying `sum` and `prod` to the
     /// operands (v0.3.0 style). `sib_val` is the witnessed sibling.
-    fn tree_step(
+    pub(crate) fn tree_step(
         &self,
         region: &mut Region<'_, Fp>,
         base: usize,
@@ -1714,7 +1714,7 @@ impl SpendConfig {
     /// scalars (one witness lift); the in-circuit cells they are tied to
     /// carry the same values for an honest prover and are forced to by
     /// the permutation gates.
-    fn assign_leaf_chain(
+    pub(crate) fn assign_leaf_chain(
         &self,
         region: &mut Region<'_, Fp>,
         base: usize,

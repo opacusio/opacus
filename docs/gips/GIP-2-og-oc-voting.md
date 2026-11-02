@@ -146,12 +146,21 @@ transaction semantics).
 
 ## 6. Test Plan
 
-Not applicable to this Process GIP (no reference implementation). The
-future vote-circuit / Stage B work packages MUST include a P/N test matrix
-covering: honest ballot loop, weight under-valuation attempts, duplicate
-`VS` rejection, stale/wrong anchor rejection, cross-proposal `VS` reuse,
-non-canonical encodings, and degenerate keys (the WG-CLSAG tamper-matrix
-convention).
+The Process GIP itself ships no chain behavior, but the WP-1 ballot
+builder (delivered in this RFC window, see section 9 P-9) carries the
+Stage A P/N matrix in `opacus-zk::vote` and `opacus-wallet::gov`:
+honest ballot loop (K = 1 and K = 4, mock prover plus a real-prover
+round trip), in-circuit `VS` == host derivation cross-check, tampered
+`VS` / root / weight instance rejection, a foreign (non-member) note
+failing membership, duplicate-`VS` seen-set rejection, foreign-anchor
+and stale-snapshot gates, the `T_min` dust floor and the K <= 8
+topology bound, canonical wire roundtrip with choice-flip signature
+binding and no-trailing-bytes parsing, cross-proposal serial/key
+unlinkability, and the row budget (K = 8 at DEPTH = 32 -> k = 13). The
+future vote-circuit / Stage B work packages MUST still include a P/N
+test matrix covering: weight under-valuation attempts, cross-proposal
+`VS` reuse at chain level, non-canonical encodings, and degenerate
+keys (the WG-CLSAG tamper-matrix convention).
 
 ## 7. Security Considerations
 
@@ -252,6 +261,22 @@ items answer the open questions of section 8 in order.
   with golden vectors and a replay mode; WP-3 WG-29 ballot transport
   profile plus the raw fallback; testnet dress rehearsal before the
   first real vote.
+
+  WP-1 delivery note (RFC window, recorded transparently): the
+  "no new circuit" assumption did not survive implementation. The
+  weight sum must bind each `v_i` to a REAL committed note, and the
+  only in-circuit path to that binding is the v4 leaf chain
+  (`[s]G + [h]G3`, membership walk) - which the existing spend circuit
+  exposes ONLY together with `DOM_NU` nullifier reveals, i.e. a vote
+  built on the unmodified spend circuit would burn the voting notes'
+  spending capability (rejected by section 7). WP-1 therefore ships an
+  ADDITIVE `BallotCircuit` in opacus-zk that reuses the v4 gadget
+  suite unchanged (Poseidon perms, rc-limb range gate, fixed-base
+  leaf chain, commutative tree walk) and swaps the nullifier stage for
+  the domain-separated vote chain of section 3.2; no existing circuit
+  file changes semantics (visibility-only `pub(crate)` upgrades).
+  Measured row budget: K = 8 at DEPTH = 32 -> k = 13, matching the
+  P-2 estimate; the ~10 s proving envelope holds.
 
 ## 10. Plain-language summary (non-normative)
 

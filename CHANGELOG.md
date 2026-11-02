@@ -159,6 +159,57 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   solvable, custodial abstention). GIP-2 section 10 adds a
   non-normative plain-language summary (what is voted on, who votes,
   what does not need a vote).
+- GIP-2 WP-1, the Stage A governance ballot builder (first CODE
+  deliverable of the GIP-2 RFC window; `crates/opacus-zk/src/vote.rs` +
+  `crates/opacus-wallet/src/gov.rs`, additive - no existing circuit,
+  wire, consensus or wallet file changes semantics; only visibility
+  `pub(crate)` upgrades in spend.rs so the ballot circuit can reuse the
+  gadget suite): the vote chain `vs_key = Poseidon_3(a, b, DOM_VSK)`,
+  `vote_rho = Poseidon_3(rho, proposal, DOM_VRHO)`,
+  `VS = Poseidon_3(vs_key, vote_rho, DOM_VS)` with NEW domain constants
+  DOM_VSK / DOM_VRHO / DOM_VS (`GHOST/v4/dom/{vsk,vrho,vs}` labels) -
+  domain-separated from the spend nullifier, so a vote never reveals or
+  burns spending capability [GIP-2 7]. One `BallotCircuit<DEPTH, K>`
+  proof per ballot (K in 1..=8, GIP-2 P-2) proves, from public
+  instances `[root, proposal, V, VS_1..VS_K]`: membership of every
+  note's tree entry at the snapshot anchor (v4 leaf chain
+  `[s]G + [h]G3`, entry `P(L.x, L.y, DOM_ACC)`, commutative walk), the
+  range-checked weight sum `V = v_1 + ... + v_K` (rc-limb gate per
+  note; sound because membership pins each v_i to a REAL committed
+  note, all < 2^64) and the in-circuit vote serials - the proposal
+  identity feeds `vote_rho` IN-CIRCUIT from a public instance, so VS is
+  a deterministic function of (note, proposal): a note revoting the
+  same proposal derives the SAME VS and the tally seen-set rejects the
+  duplicate (R-3), while different proposals derive fresh serials and
+  nothing links them. Row budget lands on the GIP-2 P-2 estimate:
+  K = 8 at mainnet depth 32 -> k = 13 (K = 1 test shape -> k = 9).
+  Mock + real-prover paths with a (DEPTH, K)-keyed process keyset cache
+  (the WG-17 pattern). Ballot binding signature (GIP-2 3.2) signs the
+  ballot sighash `blake3("GHOST/v4/gov/sighash", ...)` under a
+  per-ballot keypair `bsk = H(owner shares, proposal)`,
+  `bvk = [bsk] * R`: only the owner of both key shares can sign, the
+  choice flip breaks verification, and the verification key does not
+  link a voter's ballots across proposals. The wallet builder
+  (`gov.rs`) enforces K <= 8, checked weight sum, T_min = 10^6 dust
+  floor (P-2), recomputes every path to the anchor BEFORE proving
+  (wallet-first-validator), self-verifies the fresh ballot, and ships
+  the canonical wire format with strict parse (canonical encodings, no
+  trailing bytes); `verify_ballot` reconstructs the proof instances
+  from the ballot fields alone, `verify_ballot_against_tree` pins the
+  anchor to a local frontier (foreign-anchor and stale-snapshot
+  gates), `register` is the tally-side duplicate-VS primitive (WP-2
+  formalizes the engine). Honest note: GIP-2 P-9 said "no new circuit
+  for the first iteration" - implementation showed the value-sum
+  REQUIRES the v4 leaf chain, which the spend circuit only exposes
+  with DOM_NU nullifier reveals (a vote would burn its notes); WP-1
+  therefore ships the additive BallotCircuit reusing the gadget suite
+  unchanged, and GIP-2 sections 6/9 are amended by the same delivery.
+  Tests: opacus-zk 9 (honest K = 1/K = 4 mock + in-circuit = host VS
+  cross-check, tampered VS/root/weight instances, foreign note,
+  duplicate-VS seen-set, domain separation, real-prover honest loop at
+  k = 9) and opacus-wallet 7 (honest ballot loop, duplicate VS,
+  foreign anchor, stale snapshot, dust + topology, wire roundtrip +
+  choice-flip tamper, cross-proposal unlinkability).
 - GIP-3, coinbase transactions and issuance enforcement (docs-only
   Standards Track (Consensus) spec,
   `docs/gips/GIP-3-coinbase-issuance.md`, Status: Draft - RFC window

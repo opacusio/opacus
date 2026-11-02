@@ -29,6 +29,7 @@ pub mod prover;
 pub mod spend;
 pub mod v4;
 pub mod v4_prover;
+pub mod vote;
 
 /// Everything a wallet (or any downstream crate) typically needs from
 /// opacus-zk, in one import: `use opacus_zk::prelude::*;`

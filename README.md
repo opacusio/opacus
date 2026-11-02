@@ -490,6 +490,27 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   require linking spent leaves to creation heights - privacy break;
   ZK age proof left as an open question). Implementation = future
   WG-30 after Accepted. docs/gips/GIP-3-coinbase-issuance.md.
+- Delivered (GIP-2 WP-1, first RFC-window CODE deliverable): the Stage A
+  governance ballot builder - additive BallotCircuit in opacus-zk
+  (crates/opacus-zk/src/vote.rs) reusing the v4 spend gadget suite
+  unchanged (perms, rc-limb range gate, fixed-base leaf chain, commutative
+  tree walk) with the domain-separated vote chain vs_key = P(a, b, DOM_VSK),
+  vote_rho = P(rho, proposal, DOM_VRHO), VS = P(vs_key, vote_rho, DOM_VS):
+  one ZK proof per ballot over K <= 8 notes proves membership at the
+  snapshot anchor, the range-checked weight sum V and the one-time serials
+  VS_1..VS_K (public instances [root, proposal, V, VS_i]); the proposal
+  enters the serial IN-CIRCUIT, so a note revoting the same proposal
+  derives the SAME VS (tally seen-set rejects the duplicate, R-3) while
+  different proposals stay unlinkable, and a vote never reveals or burns
+  spending capability. Row budget lands exactly on the GIP-2 P-2 estimate
+  (K = 8 at mainnet depth 32 -> k = 13). opacus-wallet/src/gov.rs builds
+  and verifies ballots (wallet-first-validator: paths recompute to the
+  anchor BEFORE proving; T_min = 10^6 dust floor; binding signature under
+  a per-ballot keypair that does not link a voter across proposals;
+  canonical wire with strict parse). Tests: honest loop mock + real prover,
+  duplicate VS, foreign anchor, stale snapshot, dust, choice-flip tamper,
+  cross-proposal unlinkability. docs/gips/GIP-2-og-oc-voting.md sections
+  6/9 updated by the same delivery.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
