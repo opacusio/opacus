@@ -5,6 +5,9 @@ builder `1691d80`, WP-2 tally `b6cda40`, WP-3 transport `89d5ab7`);
 this runbook pins the staged path from "all library parts exist" to
 "the first real vote is rehearsed on testnet" - the last P-9 item.
 
+Progress: R0 EXECUTED (WP-D0 delivered - see the WP-D0 stage note in
+GIP-2 section 9); R1..R4 pending.
+
 Every stage has an executable definition of done. Stages R0 and R1
 need only new harness code in opacus-wallet; no node changes. Stages
 R2/R3 touch the CLI/daemon and are explicitly separated so that node
@@ -38,7 +41,8 @@ Missing (becomes the WP-D work items, section 7):
   `WalletNoteV4` + frontier pair `build_ballot` consumes.
 - No gossip envelope channel (deferred by design in the WP-3 note).
 
-## 1. Stage R0 - deterministic in-process rehearsal (executable NOW)
+## 1. Stage R0 - deterministic in-process rehearsal (EXECUTED: WP-D0,
+    golden vectors committed, replay test green)
 
 Goal: one command that runs the WHOLE protocol against a synthetic
 frontier with the real prover and records the close artifacts.

@@ -8,3 +8,6 @@ opacus-zk = { path = "../opacus-zk", features = ["real-prover"] }
 opacus-crypto = { path = "../opacus-crypto" }
 blake3.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+serde_json = "1"

@@ -335,6 +335,41 @@ items answer the open questions of section 8 in order.
   defined for v5 gossip relay dedupe; wiring the gossip channel is
   node-integration work, not part of this profile.
 
+  WP-D0 stage note (runbook stage R0 executed): the deterministic
+  in-process rehearsal is delivered as
+  `crates/opacus-wallet/examples/dress_rehearsal.rs` plus the golden
+  replay test `crates/opacus-wallet/tests/dress_rehearsal_golden.rs`
+  over the committed close artifacts
+  `crates/opacus-wallet/tests/vectors/` (`declared.json`,
+  `minutes.json`, `golden-vectors.json`; seed 42, 7 voters, a
+  mainnet-depth frontier with one dust leaf). The whole protocol runs
+  in one process with the real prover at DEPTH = 32 (K = 8 -> k = 13,
+  the P-2 budget): the honest window (5 sealed ballots + 1 raw-only +
+  1 byte-equal retransmission), the full adversarial matrix - a
+  build-time dust rejection (the T_MIN gate before any proving work),
+  a dust wire smuggled over the raw fallback -> `Malformed(Dust)` in
+  the published trace, a double vote on the same notes ->
+  `DuplicateSerial`, a foreign-scope envelope -> `ProposalMismatch`,
+  a relabelled envelope -> `HeaderMismatch`, a corrupted MAC byte ->
+  `MacMismatch`, a truncated blob -> `Truncated`, an oversized blob ->
+  `Oversize` - and the P-5 replay (shuffled archive: same
+  `result_hash`, different `archive_id`). The rehearsal shape lands
+  quorum + 84.7% approval -> Accepted (yes 58.3e9 / no 10.5e9 /
+  abstain 12.5e9 against the denominator `emission_upto(100) = 1e12`).
+  Determinism contract: every decision artifact is a pure function of
+  `--seed`; the halo2 proof blinding (OsRng) varies the entry bytes
+  run-to-run, so the `result_hash` and the record wire are stable
+  forever while the minutes fingerprint is stable per published
+  minutes - the replay test pins both over the committed vectors,
+  re-verifies every accepted proof at mainnet depth and re-derives the
+  decision rule, all inside the ordinary debug test budget (~12 s).
+  Artifact hashes (sha256): declared.json
+  751b53af47f02f3f38bf57aed788fc0c21ba6c9adcb64614ed91fee5aaeafe0c;
+  golden-vectors.json
+  0ae48ba5e4be993852805cbd5e74ae6e24900ab34fdff2044288fc9aee4f601a;
+  minutes.json
+  d3ba6a46d7256927824ed80726a3eb04047de7485b85d84169808c6699ec153a.
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

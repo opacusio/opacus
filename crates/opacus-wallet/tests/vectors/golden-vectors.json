@@ -1,0 +1,23 @@
+{
+  "abstain": 12500000000,
+  "accepted": 7,
+  "archive_id": "92a9d7e2e36ba63f6c934d24786785d637c1dfcb5845cae3bd4ba54b21541a04",
+  "class": "fund",
+  "denominator": 1000000000000,
+  "depth": 32,
+  "gip": 2,
+  "h_open": 100,
+  "no": 10500000000,
+  "outcome": "accepted",
+  "quorum_met": true,
+  "rejected": 2,
+  "result_hash": "9d895082ae00822a4aebac85202386eee9036d35e61f7795795b7a4daa7672d0",
+  "seed": 42,
+  "trace_rejections": {
+    "duplicate_serial": 1,
+    "dust": 1
+  },
+  "transition": 0,
+  "voters": 7,
+  "yes": 58300000000
+}
