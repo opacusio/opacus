@@ -15,7 +15,7 @@ is a CLSAG that passes monerod's verRctCLSAGSimple unmodified; the
 completed signature, once visible on the Monero chain, hands the adaptor
 holder the secret t.
 
-This is the Monero-side half of on-chain swap enforcement (the Ghost-side
+This is the Monero-side half of on-chain swap enforcement (the Opacus-side
 half is WG-27 chain-level CLAIM/REFUND rules). The README roadmap item
 "CLSAG adaptor signatures for on-chain swap enforcement" is delivered by
 this package.
@@ -100,11 +100,11 @@ before any crypto; recovered t canonical before use.
 
 ## 4. Nonce policy
 
-a = hash_to_scalar("ghost-bridge/clsag-adaptor/nonce-v1" || x_bytes ||
+a = hash_to_scalar("opacus-bridge/clsag-adaptor/nonce-v1" || x_bytes ||
 T || message || le64(di)). Deterministic: signing never depends on system
 randomness and never reuses a nonce across distinct (message, T) pairs.
 The domain tag is fresh - no collision with the v0.3 tags
-(ghost-bridge/clsag/*-v1) or WG-18 (sha3 over key + point + message).
+(opacus-bridge/clsag/*-v1) or WG-18 (sha3 over key + point + message).
 
 ## 5. Test matrix
 
@@ -129,7 +129,7 @@ The domain tag is fresh - no collision with the v0.3 tags
 
 - Swap protocol integration (xmr_swap.rs state machine, swap_p2p sidecar
   fields, bridge service wiring) - a later WP on top of this primitive.
-- Ghost-side (FCMP/Halo2) adaptor signatures.
+- Opacus-side (FCMP/Halo2) adaptor signatures.
 - Range proofs / amounts: verify_clsag does not cover Bulletproofs.
 - Wire formats: the adaptor block is bilateral off-chain data; the v5
   tail (130 B) and the 21-slot instance layout stay frozen (WG-26 v1).

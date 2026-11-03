@@ -9,13 +9,13 @@
 ## 1. Goal
 
 Add real, byte-compatible VERIFICATION of Monero CLSAG ring signatures to
-opacus-bridge, so the Ghost side can cryptographically confirm the Monero
+opacus-bridge, so the Opacus side can cryptographically confirm the Monero
 legs of atomic swaps (lock, claim, refund) directly from monerod data.
 
 This closes the gap left open in v0.3: crates/opacus-bridge/src/clsag.rs is
 a bridge-internal, single-signer CLSAG-style adaptor primitive. Its
 hash-to-point (domain-separated blake3 try-and-increment) and its challenge
-tags (ghost-bridge/clsag/*-v1) are deliberately NOT monerod-compatible;
+tags (opacus-bridge/clsag/*-v1) are deliberately NOT monerod-compatible;
 clsag.rs L26-L31 states that byte-compatibility lands with on-chain CLSAG
 verification in v0.4. That v0.4 layer is this work package.
 
@@ -69,7 +69,7 @@ and does not change the existing adaptor primitive in any way.
   not verified.
 - Bulletproofs / range proofs: monerod stays the source of truth for
   overall tx validity; we verify the CLSAG layer only.
-- Ghost consensus changes: chain-level swap enforcement with CLSAG
+- Opacus consensus changes: chain-level swap enforcement with CLSAG
   evidence is WP-C over the WG-27 lanes (refund/claim) in v4.rs.
 
 ## 5. Verification algorithm - normative references

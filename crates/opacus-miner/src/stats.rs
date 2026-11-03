@@ -72,7 +72,7 @@ impl MinerStats {
     pub fn print_summary(&self) {
         let uptime = self.started_at.elapsed().as_secs();
         info!(
-            "Ghost Miner | Hashrate: {:.1} H/s | Uptime: {}h {}m {}s | Shares: {} ok / {} rej | Blocks: {}",
+            "Opacus Miner | Hashrate: {:.1} H/s | Uptime: {}h {}m {}s | Shares: {} ok / {} rej | Blocks: {}",
             self.hashrate(),
             uptime / 3600,
             (uptime % 3600) / 60,

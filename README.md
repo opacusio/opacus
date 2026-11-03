@@ -158,7 +158,7 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   both the Monero/Edwards key and the Ristretto key (blake3 challenge, wide
   mod-l reduction, 96-byte serialization).
 - `xmr_swap.rs`: atomic-swap state machine Offered -> Accepted -> XmrLocked
-  -> GhostLocked -> Claimed/Refunded with fund/claim timeouts, Maker/Taker
+  -> OpacusLocked -> Claimed/Refunded with fund/claim timeouts, Maker/Taker
   roles, blake3 hashlock.
 - `xmr_rpc.rs`: monero-wallet-rpc client (transfer with unlock_time and
   payment_id = hashlock, get_transfers filtered by payment_id, balance and
@@ -188,8 +188,8 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
 - `xmr_swap.rs` / `swap_p2p.rs`: CLSAG adaptor swap integration
   (WG-CLSAG-adaptor-int) - the taker pre-signs the Monero-side claim
   spend of the locked XMR via `XmrClaimAdaptor::build` bound to the
-  swap secret t = hash_to_scalar("ghost-bridge/swap-secret-v1" ||
-  preimage) and the bilateral claim message blake3("ghost-swap/
+  swap secret t = hash_to_scalar("opacus-bridge/swap-secret-v1" ||
+  preimage) and the bilateral claim message blake3("opacus-swap/
   xmr-claim-msg-v1" || offer_id || hashlock); the adaptor rides the
   Claim frame as an optional serde-default sidecar (`XmrClaimSidecar`,
   v1 frames decodable, offer ids untouched) and the maker completes it
@@ -240,19 +240,19 @@ The workspace builds warning-free; CI enforces clippy with -D warnings. License:
   rejected and the connection closed; the swap protocol never crosses
   the authenticated control plane).
 - TCP swap node: automatic protocol replies (Offer -> Accept,
-  GhostLocked -> Claim) with protocol-violation disconnects; adopted
+  OpacusLocked -> Claim) with protocol-violation disconnects; adopted
   (upgraded) connections speak the swap protocol directly.
 
 ### contracts (wOPACUS token)
 
 - `wOPACUS.sol`: ERC-20 wrapper with quorum-gated mint (sorted-signature
   ecrecover check) and burn-for-release; deployed to the Sepolia testnet
-  (address tracked in `contracts/wghost.address`), quorum threshold 1/1 for
+  (address tracked in `contracts/wopacus.address`), quorum threshold 1/1 for
   testnet. Marked AUDIT REQUIRED before any mainnet use.
 - `foundry.toml` + `WOPACUSTest.t.sol`: forge suite for the wrapper - the
   WG-16 hardening pins the quorum N-of-M at deployment, binds the mint
   digest to block.chainid and enforces the EIP-2 low-s range.
-- Legacy wGHOST (quorum 1/1) is DEPRECATED: the contract name compiles
+- Legacy wOPACUS (quorum 1/1) is DEPRECATED: the contract name compiles
   into the deployed bytecode and cannot be renamed in place, so the
   rebrand ships as a fresh wOPACUS deployment (audit WG-16).
 
@@ -314,15 +314,15 @@ verifies in about 7.3 ms (~137 tx/s).
 
 ## Sepolia deployment (zero-typing PowerShell chain)
 
-1. `run_sepolia_deploy.ps1` - funds gate, in-process deployer key.
-2. `deploy_wghost.ps1` - deploys the wrapped-token contract to Sepolia
-   (legacy wGHOST run; the WG-16 redeploy round ships wOPACUS).
-3. `finalize_wghost.ps1` - bytecode gate, soft token calls, hard quorum
-   cross-checks, persists the address to `contracts/wghost.address`.
+1. `deploy_wopacus.ps1` - deploys the wrapped-token contract to Sepolia
+   and persists the address to `contracts/wopacus.address`.
 
-Also at the repo root: `fix_deployer_key.ps1` (zero-input deployer key
-rotation with cross-verification), `publish_ghost.ps1` (safe one-command
-GitHub publish with secret gates and no force-push).
+Also at the repo root: `publish_opacus.ps1` (safe one-command GitHub
+publish with secret gates and no force-push). The one-off migration
+scripts of the earlier deployment rounds (`run_sepolia_deploy`,
+`finalize_*`, `fix_*`, `wire_*`, `integrate_*`, `add_*`) were removed
+from the tree in the rebrand pass - their effects are already part of
+the deployed contract history and the git log.
 
 ## Security notes
 
@@ -343,7 +343,7 @@ GitHub publish with secret gates and no force-push).
   dropped, and the identity Debug output never includes secret
   material.
 - The wOPACUS mint is quorum-gated; the threshold is fixed N-of-M at
-  deployment (no in-place quorum updates). The legacy wGHOST Sepolia
+  deployment (no in-place quorum updates). The legacy wOPACUS Sepolia
   deployment (quorum 1/1) is deprecated. An external audit is REQUIRED
   before any mainnet use; testnet keys are throwaway.
 
@@ -401,7 +401,7 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   CLSAG adaptor - the adaptor is now a fail-closed part of the swap
   coordination protocol. The taker pre-signs the Monero-side claim
   spend of the locked XMR bound to the swap secret t =
-  hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage) and the
+  hash_to_scalar("opacus-bridge/swap-secret-v1" || preimage) and the
   bilateral claim message (offer_id || hashlock); the adaptor rides the
   Claim frame as an optional serde-default sidecar (v1 frames
   decodable, offer ids untouched); the maker verifies it against THIS

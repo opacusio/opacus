@@ -1,66 +1,59 @@
-GIP-2 dress rehearsal - stage R2 (WP-D2a) smoke log
-=====================================================
-Date: 2026-11-03 (UTC) | rustc 1.99.1 | cargo build --release -p opacus-cli
-Binaries: target/release/ghost + target/release/opacus (same main.rs, two targets)
-Fresh data dir: /tmp/r2-smoke (destroyed after the run; wallet below is throwaway)
+# GIP-2 runbook stage R2 - single-node testnet smoke (rebrand re-run)
+# date_utc: 2026-11-03T05:29:42Z
+# rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+# binary: target/release/opacus
+# binary_sha256: 78f617fcba553bbde08025a7c3ac952fa54ce5bd4983be787885a26cdfddaeda
+# surface: single canonical bin 'opacus' (the legacy alias target is removed)
 
-[1] negative boot - typo'd network must refuse BEFORE any side effect (Node-1)
-$ ./target/release/ghost start --network mainet --data-dir /tmp/r2-smoke/bad
-Starting Ghost Node... (Ctrl+C to stop)
+## [1] negative boot: opacus start --network mainet (typo must refuse, Node-1)
+Starting Opacus Node... (Ctrl+C to stop)
   network:  mainet
-  data dir: /tmp/r2-smoke/bad
+  data dir: /tmp/r2smoke/neg
 Error: Initialization failed: unknown network "mainet" (expected "mainnet" or "testnet")
-exit code 1; /tmp/r2-smoke/bad NOT created; no socket bound
+exit_code=1
+side_effects=none (no data dir written, no socket bound)
 
-[2] testnet boot - daemon up, consensus = testnet parameter set, p2p listener bound
-$ ./target/release/ghost start --network testnet --data-dir /tmp/r2-smoke/data
+## [2] fresh-dir testnet boot: opacus start --network testnet --data-dir <fresh>
+Starting Opacus Node... (Ctrl+C to stop)
   network:  testnet
-  data dir: /tmp/r2-smoke/data
-2026-11-03T00:15:44.401281Z  INFO opacus_node::daemon: Ghost daemon initialized at "/tmp/r2-smoke/data"
-2026-11-03T00:15:44.401293Z  INFO opacus_node::daemon: consensus: net=testnet | v4_activation_height=0 | fee_floor=0
-[opacusd-net] node 658219275b8d5671 listening on 0.0.0.0:18080 (advertise 127.0.0.1:18080, peers 0)
-2026-11-03T00:15:44.401498Z  INFO opacus_node::daemon: Ghost node running | P2P: 18080 | RPC: 18081 | net: testnet
-killed with SIGINT after 25 s (heartbeat stub runs forever by design); data dir holds network-identity.json + peers.json
+  data dir: /tmp/r2smoke/boot
+2026-11-03T05:30:03.211994Z  INFO opacus_node::daemon: Opacus daemon initialized at "/tmp/r2smoke/boot"
+2026-11-03T05:30:03.212005Z  INFO opacus_node::daemon: consensus: net=testnet | v4_activation_height=0 | fee_floor=0
+[opacusd-net] node 05fe38814966d690 listening on 0.0.0.0:18080 (advertise 127.0.0.1:18080, peers 0)
+2026-11-03T05:30:03.212233Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T05:30:03.212236Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+p2p_listener_during_run: 1 listener(s) bound on :18080
+exit_code=124 (124 = SIGINT after the 25s window, the heartbeat stub runs forever)
+boot_dir_contents: network-identity.json peers.json 
 
-[3] wallet create + address (HOME redirected to the smoke dir)
-$ ./target/release/ghost create-wallet
+## [3] wallet smoke: opacus create-wallet && opacus address (throwaway, seed redacted)
 Wallet created!
 
 SEED PHRASE (keep it safe!):
-  [redacted - throwaway smoke wallet, wiped after the run]
-WARNING: anyone with this phrase can steal your funds!
-Address: ghost1f63b2fc8f7cb1c13563543f3a9b3b7ef58e9e5dcfb6d0cdb465a5553706658f45bea1d237731560c5d6d0460056f5ffe66b45d758cc2594497fd924ffb10af5c
-Wallet:  /tmp/r2-smoke/home/.ghost/wallet
-$ ./target/release/ghost address
-Address: ghost1f63b2fc8f7cb1c13563543f3a9b3b7ef58e9e5dcfb6d0cdb465a5553706658f45bea1d237731560c5d6d0460056f5ffe66b45d758cc2594497fd924ffb10af5c
+=============================================
+<redacted-mnemonic>
+=============================================
 
-[4] solo mining smoke - the runbook command verbatim
-$ ./target/release/ghost mine --solo --duration-secs 300
+WARNING: anyone with this phrase can steal your funds!
+Address: opacus1cade696f36318df69bccc510e84937ed81daf0c8a638392989301a47fa10cc4de4660b69bc761fa91d795125a84a8dae1db61ba3851732055c0ba1258673d62c
+Wallet:  /tmp/r2smoke/home/.opacus/wallet
+address: Address: opacus1cade696f36318df69bccc510e84937ed81daf0c8a638392989301a47fa10cc4de4660b69bc761fa91d795125a84a8dae1db61ba3851732055c0ba1258673d62c
+
+## [4] solo miner: opacus mine --solo --duration-secs 300
+Opacus Miner
   Mode:     Solo
   Threads:  1
-  Address:  ghost1f63b2fc8f7cb1c13563543f3a9b3b7ef58e9e5dcfb6d0cdb465a5553706658f45bea1d237731560c5d6d0460056f5ffe66b45d758cc2594497fd924ffb10af5c
+  Address:  opacus1cade696f36318df69bccc510e84937ed81daf0c8a638392989301a47fa10cc4de4660b69bc761fa91d795125a84a8dae1db61ba3851732055c0ba1258673d62c
   Duration: 300s (Ctrl+C to stop early)
 
-2026-11-03T00:16:25.816123Z  INFO opacus_miner::engine: Ghost Miner v0.9.0 | threads: 1 | mode: Solo
-2026-11-03T00:16:25.816135Z  INFO opacus_miner::engine: Mining started (difficulty: 1000)
-2026-11-03T00:16:25.839503Z  INFO opacus_miner::engine: Thread 0 found nonce 40
-2026-11-03T00:16:30.816339Z  INFO opacus_miner::stats: BLOCK FOUND! Total: 1
-2026-11-03T00:16:30.816378Z  INFO opacus_miner::stats: Ghost Miner | Hashrate: 8.2 H/s | Uptime: 0h 0m 5s | Shares: 0 ok / 0 rej | Blocks: 1
+2026-11-03T05:30:28.224117Z  INFO opacus_miner::engine: Opacus Miner v0.9.0 | threads: 1 | mode: Solo
+2026-11-03T05:30:28.224131Z  INFO opacus_miner::engine: Mining started (difficulty: 1000)
+2026-11-03T05:30:28.291227Z  INFO opacus_miner::engine: Thread 0 found nonce 117
+2026-11-03T05:30:33.224363Z  INFO opacus_miner::stats: BLOCK FOUND! Total: 1
+2026-11-03T05:30:33.224399Z  INFO opacus_miner::stats: Opacus Miner | Hashrate: 23.6 H/s | Uptime: 0h 0m 5s | Shares: 0 ok / 0 rej | Blocks: 1
 
 Mining session complete!
+exit_code=0
 
-Stage log (runbook section 3):
-- daemon boot OK (fresh data dir, consensus net=testnet, v4_activation_height=0, fee_floor=0)
-- p2p listener bound: 0.0.0.0:18080 (net_service::autostart, node id 658219275b8d5671, peers 0)
-- miner: solo difficulty-1000 header solved by thread 0 in ~23 ms; the engine halts on block
-  found, so the 300 s session completed in 5 s - observed hash rate 8.2 H/s on one release
-  thread (2-core container); reward address auto-derived from the smoke wallet mnemonic
-- wallet create/sync: create-wallet + address OK (mnemonic.txt + address.txt written);
-  no chain sync exists yet (gap, see below)
-
-Gap list re-confirmed (runbook section 0, still open after R2):
-- daemon.run() is a heartbeat loop: no chain service, no block production/validation wiring;
-  the mined block is counted, not submitted to any state machine
-- no RPC surface: rpc_port 18081 is only echoed in the log line, nothing binds it
-- LightWallet has no gov bridge (WP-D2b); no gossip envelope channel (WP-D2c);
-  no collector service (WP-D2d)
+## [5] cleanup
+smoke wallet and data dirs deleted; no secrets persisted

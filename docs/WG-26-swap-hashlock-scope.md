@@ -7,19 +7,19 @@
 
 ## 1. Problem
 
-The GHOST leg of an atomic swap is currently a p2p honor system:
+The OPACUS leg of an atomic swap is currently a p2p honor system:
 
-- xmr_swap.rs tracks Phase Offered..Refunded, but GhostLocked only records a
-  ghost_tx_ref string pointing at "the bridge pool". Nothing on-chain binds
+- xmr_swap.rs tracks Phase Offered..Refunded, but OpacusLocked only records a
+  opacus_tx_ref string pointing at "the bridge pool". Nothing on-chain binds
   that pool lock to the offer hashlock.
-- The preimage travels in swap_p2p messages (GhostLocked, Claim) in cleartext
+- The preimage travels in swap_p2p messages (OpacusLocked, Claim) in cleartext
   JSON; a claim is unverifiable by consensus.
 - Consensus [S4 9] checks topology, proof, balance, nullifiers and root; it
   has zero swap awareness. Scout v2 census: 0 hashlock/preimage hits in zk
   spend.rs, zk v4.rs and wallet tx_v4.rs; consensus mentions only TxV4
   imports.
 - xmr_swap.rs module docs name the gap explicitly (line 23: "Enforcing the
-  hashlock inside the Ghost zk circuit ...").
+  hashlock inside the Opacus zk circuit ...").
 
 ## 2. Goals and Non-goals
 
@@ -43,16 +43,16 @@ Non-goals:
 
 ### 3.1 Primitive (crates/opacus-zk/src/v4.rs)
 
-- New domain: dom_swap() = fp_from_label(b"GHOST/v4/dom/swap").
+- New domain: dom_swap() = fp_from_label(b"OPACUS/v4/dom/swap").
 - A 32-byte preimage splits into two canonical 16-byte lanes s0 and s1
   (each 128 bits, no field-reduction ambiguity).
 - H = Poseidon_3(dom_swap, s0, s1) via the existing poseidon_absorb
   convention (same shape as nk and tree entries).
 - hashlock_swap(preimage: [u8; 32]) returns (H, s0, s1). Host-side helper in
   WG-26; the same algebra is replicated in-circuit in WP-2.
-- The bridge blake3 hashlock_of (b"ghost-swap-hashlock-v1") is UNCHANGED and
+- The bridge blake3 hashlock_of (b"opacus-swap-hashlock-v1") is UNCHANGED and
   remains the XMR-leg lock (Monero payment_id). One 32-byte preimage feeds
-  both legs: blake3 on the XMR side, Poseidon lanes on the GHOST side.
+  both legs: blake3 on the XMR side, Poseidon lanes on the OPACUS side.
   Revealing the preimage once satisfies both chains.
 
 ### 3.2 Swap modes (public instance slot 15)
@@ -131,7 +131,7 @@ loudly.
   nonzero, s lanes zero, entry nonzero; swap_idx bounds per mode; any
   violation is TxV4Error::Canonical or Topology.
 - to_bytes: v4 fields then the tail.
-- sighash: sighash_v5 = blake3(b"GHOST/v4/sighash", le64(5), root, ns,
+- sighash: sighash_v5 = blake3(b"OPACUS/v4/sighash", le64(5), root, ns,
   leaves, rc_in, rc_out, fee, le64(flag), le64(swap_idx), H, s0, s1, entry).
   All verification-relevant swap material is covered (enc_notes stay
   deliberately uncovered, as documented today).
@@ -161,7 +161,7 @@ loudly.
   published spent_swap_entry; refund additionally requires height at/after
   lock_height + claim_timeout.
 - swap_node.rs and swap_service.rs wire registry events into the existing
-  p2p swap plane; GhostLocked and Claim messages keep flowing (ops
+  p2p swap plane; OpacusLocked and Claim messages keep flowing (ops
   convenience) while the chain becomes the arbiter.
 
 ## 4. Work Packages
@@ -218,7 +218,7 @@ tests green.
   (halo2 binds the instance column length). Testnet-only BREAKING; document
   in CHANGELOG; no mainnet exposure (pre-mainnet).
 - R2. The v5 tail sits after bind_sig, keeping the v4 byte prefix stable;
-  the sighash domain string stays b"GHOST/v4/sighash" with the le64(5)
+  the sighash domain string stays b"OPACUS/v4/sighash" with the le64(5)
   version tag (no new domain label).
 - R3. enc_notes remain outside the sighash (pre-existing documented gap;
   unchanged by WG-26).

@@ -1,4 +1,4 @@
-//! Ghost Full Node
+//! Opacus Full Node
 pub mod daemon;
 
 pub use daemon::{DaemonConfig, DaemonError, OpacusDaemon};

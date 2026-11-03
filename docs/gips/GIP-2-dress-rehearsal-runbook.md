@@ -9,7 +9,10 @@ Progress: R0 EXECUTED (WP-D0 delivered - see the WP-D0 stage note in
 GIP-2 section 9); R1 EXECUTED (WP-D1 delivered - see the WP-D1 stage
 note in GIP-2 section 9); R2 EXECUTED (WP-D2a delivered - see the
 WP-D2a stage note in GIP-2 section 9, raw smoke log
-`docs/gips/GIP-2-r2-stage-log.txt`); R3 IN PROGRESS (WP-D2b
+`docs/gips/GIP-2-r2-stage-log.txt`); REBRAND EXECUTED (the legacy
+internal codename scrubbed tree-wide, the R0/R1 artifacts regenerated
+deterministically, R2 re-validated on the renamed surface - see the
+rebrand stage note in GIP-2 section 9); R3 IN PROGRESS (WP-D2b
 and WP-D2c delivered - see the stage notes in GIP-2 section 9;
 WP-D2d and the scripted scenario pending); R4 pending.
 
@@ -36,7 +39,7 @@ Missing (becomes the WP-D work items, section 7):
 
 - No end-to-end driver: every part is exercised by unit tests, no
   artifact-producing rehearsal run.
-- CLI `ghost start` hardcodes `DaemonConfig::default()`
+- CLI `opacus start` hardcodes `DaemonConfig::default()`
   (`network: "mainnet"`); `select_consensus` accepts both strings but
   the CLI has no `--network` flag yet.
 - `OpacusDaemon::run()` is a heartbeat loop (no chain service, no
@@ -136,8 +139,8 @@ close statement; a tampered minutes file (one flipped byte) is
 rejected.
 
 ## 3. Stage R2 - single-node testnet smoke (build/run surface)
-    (EXECUTED: WP-D2a, `ghost start --network/--data-dir` + the real
-    `ghost` bin; boot/p2p/miner/wallet smoke log committed,
+    (EXECUTED: WP-D2a, `opacus start --network/--data-dir` + the real
+    `opacus` bin; boot/p2p/miner/wallet smoke log committed,
     `docs/gips/GIP-2-r2-stage-log.txt`)
 
 Goal: prove the node bins build, boot and mine on the testnet
@@ -148,16 +151,16 @@ gaps.
 Work item: CLI `--network` flag (WP-D2a, tiny). Delivered together
 with: `--data-dir` (makes the "fresh data_dir" DoD testable without
 touching the real home dir), the p2p autostart wiring in
-`ghost start` (opacusd parity - the "p2p listener bound" stage-log
-item needs a real listener), and the `ghost` bin alias in
-opacus-cli (the runbook commands say `ghost`, the built binary said
+`opacus start` (opacusd parity - the "p2p listener bound" stage-log
+item needs a real listener), and the `opacus` bin alias in
+opacus-cli (the runbook commands say `opacus`, the built binary said
 `opacus` - now both names build from the same main.rs).
 
 ```sh
 cargo build --release -p opacus-cli
-./target/release/ghost start --network testnet   # p2p 18080
-./target/release/ghost mine --solo --duration-secs 300
-./target/release/ghost create-wallet && ./target/release/ghost address
+./target/release/opacus start --network testnet   # p2p 18080
+./target/release/opacus mine --solo --duration-secs 300
+./target/release/opacus create-wallet && ./target/release/opacus address
 ```
 
 Note: pre-mainnet `select_consensus` maps BOTH network strings to
@@ -196,7 +199,7 @@ Work items (each independently gated, in order):
 
 Scenario (scripted, timestamps logged):
 
-1. Bring up N=3 nodes (`ghost start --network testnet`), mine past
+1. Bring up N=3 nodes (`opacus start --network testnet`), mine past
    `H_open`.
 2. The maintainer publishes `declared.json` (proposal + anchor +
    collector pk).
@@ -227,6 +230,11 @@ from R0 keep the engine byte-pinned in CI.
 - the secret scan (grep the committed HEAD tree for the GitHub PAT
   prefix, `g h p _` without spaces) has zero matches before every
   push; run it AFTER the commit, against HEAD itself.
+- the brand scan (grep the committed HEAD tree for the legacy internal
+  codename, case-insensitive regex `gh(o)st`) has zero matches before
+  every push - the project is Opacus everywhere: code, wire and domain
+  tags, docs, artifacts; run it AFTER the commit, against HEAD itself,
+  right after the secret scan.
 - CI 4/4 (cargo-deny, RustSec, Rust workspace, Foundry) on every
   pushed stage commit.
 - Stage notes appended to the GIP-2 delivery section (P-9 line)

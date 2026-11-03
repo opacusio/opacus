@@ -9,7 +9,7 @@
 )]
 //! # opacus-zk
 //!
-//! Halo2-based FCMP-style zero-knowledge membership proofs for Ghost.
+//! Halo2-based FCMP-style zero-knowledge membership proofs for Opacus.
 //!
 //! One proof (`FcmpCircuit`) simultaneously demonstrates:
 //! - **ownership**: the spender knows the note's spending key;

@@ -1,4 +1,4 @@
-//! GHOST v0.4 Phase 1a: foundations for in-circuit value conservation.
+//! OPACUS v0.4 Phase 1a: foundations for in-circuit value conservation.
 //!
 //! Implements the cryptographic core of the v0.4 specification
 //! (`docs/specs/v0.4-value-conservation.md`, referenced below as [S4]):
@@ -37,7 +37,7 @@
 //!   The reduction follows the existing opacus-zk little-endian limb
 //!   convention (`poseidon::fp_from_16`).
 //! - The v0.4 domain constants follow the same convention: the first 16
-//!   bytes of `blake3("GHOST/v4/dom/<name>")` are reduced into `Fp` (the
+//!   bytes of `blake3("OPACUS/v4/dom/<name>")` are reduced into `Fp` (the
 //!   field the existing Poseidon instance operates over).
 
 use ff::{Field, PrimeField};
@@ -70,22 +70,22 @@ fn fp_from_label(label: &[u8]) -> Fp {
 
 /// Domain constant for the leaf-v2 value/rho hash.
 pub fn dom_leaf_v2() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/leaf2")
+    fp_from_label(b"OPACUS/v4/dom/leaf2")
 }
 
 /// Domain constant for the nullifier key.
 pub fn dom_nk() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/nk")
+    fp_from_label(b"OPACUS/v4/dom/nk")
 }
 
 /// Domain constant for the nullifier.
 pub fn dom_nu() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/nu")
+    fp_from_label(b"OPACUS/v4/dom/nu")
 }
 
 /// Domain constant for swap hashlocks [S4 12, WG-26].
 pub fn dom_swap() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/swap")
+    fp_from_label(b"OPACUS/v4/dom/swap")
 }
 
 /// Split a 32-byte swap preimage into two canonical 16-byte lanes [S4 12
@@ -133,13 +133,13 @@ pub fn fq_reduce_fp(x: Fp) -> Fq {
     fq_from_32(&repr)
 }
 
-/// `hashgen(name) = [blake3("GHOST/v4/gen/" + name) mod q] * G`.
+/// `hashgen(name) = [blake3("OPACUS/v4/gen/" + name) mod q] * G`.
 ///
 /// The discrete logarithms between any two hashgen outputs are unknown by
 /// construction (blake3 outputs, no trapdoor) [S4 2, S4 11].
 pub fn hashgen(name: &str) -> pallas::Point {
     let mut label = Vec::with_capacity(13 + name.len());
-    label.extend_from_slice(b"GHOST/v4/gen/");
+    label.extend_from_slice(b"OPACUS/v4/gen/");
     label.extend_from_slice(name.as_bytes());
     let d = blake3::hash(&label);
     pallas::Point::generator() * fq_from_32(d.as_bytes())
@@ -982,14 +982,16 @@ mod tests {
         assert!(prover.verify().is_err());
     }
 
-    // Pinned test vectors (blake3-derived, stable across platforms).
+    // Pinned test vectors (blake3-derived, stable across platforms;
+    // refreshed by the rebrand pass - the domain labels moved to
+    // OPACUS/v4, the pins are the values the renamed labels derive).
     const DOM_LEAF_V2_HEX: &str =
-        "ef5fb9e6b52e8fd2ad13a41cb5bbe7d700000000000000000000000000000000";
-    const DOM_NK_HEX: &str = "05aaa5ef73643808a460509a993602b000000000000000000000000000000000";
-    const DOM_NU_HEX: &str = "c7877750c65441e2063ff5598b3c8a6400000000000000000000000000000000";
-    const VALUE_GEN_HEX: &str = "aa6ee3702b714724c674cd327429f8574f821b1160a0b83929a2b5ee967c0b05";
-    const BLIND_GEN_HEX: &str = "ef50f50cf65eb62760ff7d35c03356fc4fac2728b39805b73e20ef7473b4cfb2";
-    const LEAF_GEN_HEX: &str = "cfa9b76b3ef032d07635c7faafc029305f548fe634fdd9634b1df44ac441b50a";
+        "6d0aa1c9ad5273537293439246eace0800000000000000000000000000000000";
+    const DOM_NK_HEX: &str = "052d16073df54e282fee2665827fec6300000000000000000000000000000000";
+    const DOM_NU_HEX: &str = "0b154cfa9e060dce914688bbb3a0a06d00000000000000000000000000000000";
+    const VALUE_GEN_HEX: &str = "5071c6aa984cbdfd77e39c8e87c2aa1d24c612a301fdf37deecd60a43b837ea6";
+    const BLIND_GEN_HEX: &str = "6a31655915dd32ea3f00e30702e7c90ba17f91a2a32a1f2bd66f06b0f262420b";
+    const LEAF_GEN_HEX: &str = "ab444efc34591d9ec64c9359da5999e3015ec92224e69fc31bf558bcb9e9fe03";
 }
 
 // ---------------------------------------------------------------------------
@@ -1013,7 +1015,7 @@ mod swap_wg26_tests {
 
     #[test]
     fn dom_swap_is_the_frozen_label() {
-        assert_eq!(dom_swap(), fp_from_label(b"GHOST/v4/dom/swap"));
+        assert_eq!(dom_swap(), fp_from_label(b"OPACUS/v4/dom/swap"));
         assert_ne!(dom_swap(), dom_leaf_v2());
         assert_ne!(dom_swap(), dom_nk());
         assert_ne!(dom_swap(), dom_nu());

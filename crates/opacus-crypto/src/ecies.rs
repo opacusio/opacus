@@ -10,7 +10,7 @@
 //! * the N3 wire (notes.rs): tags "opacus-note-v1 ..." - the N3 bytes
 //!   stay byte-identical (the unchanged legacy notes.rs test suite is the
 //!   regression gate);
-//! * the WG-29 in-transaction enote: tags "ghost-encnote-v1 ...".
+//! * the WG-29 in-transaction enote: tags "opacus-encnote-v1 ...".
 //!
 //! The in-transaction enote wire form (D4) is BINARY and fixed size:
 //! `epk 32 || nonce 16 || ct 137 || mac 32` = 217 B. It fits both caps:
@@ -61,11 +61,11 @@ pub const N3_NOTE_TAGS: EciesTags = EciesTags {
 
 /// WG-29 in-transaction enote tags (D4).
 pub const ENOTE_TAGS: EciesTags = EciesTags {
-    ks_context: "ghost-encnote-v1 keystream",
-    mac_context: "ghost-encnote-v1 mac",
-    ks_block_tag: b"ghost-encnote-ks-v1",
-    mac_tag: b"ghost-encnote-mac-v1",
-    id_tag: b"ghost-encnote-id-v1",
+    ks_context: "opacus-encnote-v1 keystream",
+    mac_context: "opacus-encnote-v1 mac",
+    ks_block_tag: b"opacus-encnote-ks-v1",
+    mac_tag: b"opacus-encnote-mac-v1",
+    id_tag: b"opacus-encnote-id-v1",
 };
 
 /// GIP-2 WP-3 ballot transport tags (P-4): the WG-29 envelope
@@ -73,17 +73,17 @@ pub const ENOTE_TAGS: EciesTags = EciesTags {
 /// ballot collector key. Same algebra, disjoint keys and tags - a
 /// ballot envelope never opens as an enote and vice versa (tested).
 pub const BALLOT_TAGS: EciesTags = EciesTags {
-    ks_context: "ghost-ballot-v1 keystream",
-    mac_context: "ghost-ballot-v1 mac",
-    ks_block_tag: b"ghost-ballot-ks-v1",
-    mac_tag: b"ghost-ballot-mac-v1",
-    id_tag: b"ghost-ballot-id-v1",
+    ks_context: "opacus-ballot-v1 keystream",
+    mac_context: "opacus-ballot-v1 mac",
+    ks_block_tag: b"opacus-ballot-ks-v1",
+    mac_tag: b"opacus-ballot-mac-v1",
+    id_tag: b"opacus-ballot-id-v1",
 };
 
 /// Derivation tag of the ballot collector key from the BIP-39 seed
 /// (GIP-2 WP-3): `ballot_sk = scalar(blake3(BALLOT_DERIVE_TAG || seed))`,
 /// the D3 pattern with its own domain tag.
-pub const BALLOT_DERIVE_TAG: &[u8] = b"ghost_ballot_derive_v1";
+pub const BALLOT_DERIVE_TAG: &[u8] = b"opacus_ballot_derive_v1";
 
 // ---------------------------------------------------------------------------
 // Core algebra (byte-compatible with the legacy notes.rs construction)
@@ -169,7 +169,7 @@ pub fn id_digest(
 // ---------------------------------------------------------------------------
 
 /// Derivation tag of the wallet note key from the BIP-39 seed (D3).
-pub const NOTE_DERIVE_TAG: &[u8] = b"ghost_note_derive_v1";
+pub const NOTE_DERIVE_TAG: &[u8] = b"opacus_note_derive_v1";
 
 /// A zeroizing wrapper over the canonical 32-byte note secret scalar
 /// (D3). No Debug/Display impl exists on purpose; the buffer is wiped on
@@ -218,7 +218,7 @@ pub fn keypair_from_seed_tagged(tag: &[u8], seed: &[u8; 64]) -> NoteSecret {
 }
 
 /// Derive the wallet note keypair from the 64-byte BIP-39 seed (D3):
-/// `note_sk = scalar(blake3("ghost_note_derive_v1" || seed))`.
+/// `note_sk = scalar(blake3("opacus_note_derive_v1" || seed))`.
 /// Deterministic in the seed.
 pub fn note_keypair_from_seed(seed: &[u8; 64]) -> NoteSecret {
     keypair_from_seed_tagged(NOTE_DERIVE_TAG, seed)

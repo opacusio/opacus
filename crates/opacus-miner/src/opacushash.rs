@@ -1,7 +1,7 @@
-// opacus audit (v3): GhostHash round loop is consensus-critical; the indexed form
+// opacus audit (v3): OpacusHash round loop is consensus-critical; the indexed form
 // mirrors the reference spec 1:1, iteration-by-reference would obscure it.
 #![allow(clippy::needless_range_loop)]
-//! GhostHash PoW core
+//! OpacusHash PoW core
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
@@ -9,17 +9,17 @@ use std::time::Instant;
 pub const SCRATCHPAD_SIZE: usize = 256 * 1024;
 pub const NUM_ITERATIONS: u32 = 128;
 
-pub struct GhostHashContext {
+pub struct OpacusHashContext {
     scratchpad: Vec<u8>,
 }
 
-impl Default for GhostHashContext {
+impl Default for OpacusHashContext {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GhostHashContext {
+impl OpacusHashContext {
     pub fn new() -> Self {
         Self {
             scratchpad: vec![0u8; SCRATCHPAD_SIZE],
@@ -50,7 +50,7 @@ impl GhostHashContext {
         }
 
         let mut h = blake3::Hasher::new();
-        h.update(b"ghost_final_v1");
+        h.update(b"opacus_final_v1");
         h.update(input);
         h.update(&state);
         h.update(&self.scratchpad[..4096]);
@@ -66,7 +66,7 @@ pub fn verify(header_hash: &[u8; 32], nonce: u64, difficulty: u64) -> bool {
     let mut input = Vec::with_capacity(40);
     input.extend_from_slice(header_hash);
     input.extend_from_slice(&nonce.to_le_bytes());
-    let mut ctx = GhostHashContext::new();
+    let mut ctx = OpacusHashContext::new();
     let hash = ctx.hash(&input);
     let prefix = u64::from_le_bytes(hash[..8].try_into().unwrap());
     prefix < target_for(difficulty)
@@ -80,7 +80,7 @@ pub fn mine(
     deadline: Option<Instant>,
     hashes_counter: &AtomicU64,
 ) -> Option<u64> {
-    let mut ctx = GhostHashContext::new();
+    let mut ctx = OpacusHashContext::new();
     let mut nonce = start_nonce;
     let mut since_report = 0u64;
 

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum SwapState {
     Initialized,
-    GhostLocked,
+    OpacusLocked,
     MoneroEscrowed,
     SignaturesExchanged,
     Completed,
@@ -22,7 +22,7 @@ pub struct SwapId(pub [u8; 32]);
 impl SwapId {
     pub fn new(initiator: &[u8], hash_lock: &[u8]) -> Self {
         let mut hasher = Sha3_256::new();
-        hasher.update(b"ghost_swap_id");
+        hasher.update(b"opacus_swap_id");
         hasher.update(initiator);
         hasher.update(hash_lock);
         Self(hasher.finalize().into())

@@ -46,10 +46,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::adaptor::SwapSecret;
 
-const NONCE_TAG: &[u8] = b"ghost-bridge/clsag/nonce-v1";
-const NONCE_WIDE_TAG: &[u8] = b"ghost-bridge/clsag/nonce-wide-v1";
-const CHALLENGE_TAG: &[u8] = b"ghost-bridge/clsag/chal-v1";
-const HP_TAG: &[u8] = b"ghost-bridge/clsag/hp-v1";
+const NONCE_TAG: &[u8] = b"opacus-bridge/clsag/nonce-v1";
+const NONCE_WIDE_TAG: &[u8] = b"opacus-bridge/clsag/nonce-wide-v1";
+const CHALLENGE_TAG: &[u8] = b"opacus-bridge/clsag/chal-v1";
+const HP_TAG: &[u8] = b"opacus-bridge/clsag/hp-v1";
 
 /// Decompress a curve point, or `None` on non-canonical / non-decompressible
 /// encodings.
@@ -416,7 +416,7 @@ mod tests {
         b
     }
 
-    const MSG: &[u8] = b"ghost-bridge: clsag claim xmr with preimage";
+    const MSG: &[u8] = b"opacus-bridge: clsag claim xmr with preimage";
 
     #[test]
     #[allow(deprecated)]

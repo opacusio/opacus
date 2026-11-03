@@ -1,4 +1,4 @@
-//! Adaptor signatures for the XMR <-> GHOST swap secret (WG-18).
+//! Adaptor signatures for the XMR <-> OPACUS swap secret (WG-18).
 //!
 //! A Schnorr adaptor signature over the ed25519 basepoint: the signer
 //! produces a signature that only becomes a valid full Schnorr signature
@@ -74,8 +74,8 @@ impl SwapSecret {
 
 /// Domain-separated SHA-3 tag: keeps every hash in this module independent
 /// of the swap hashlock, offer ids and other bridge hashes.
-const NONCE_TAG: &[u8] = b"ghost-bridge/adaptor/nonce-v1";
-const CHALLENGE_TAG: &[u8] = b"ghost-bridge/adaptor/chal-v1";
+const NONCE_TAG: &[u8] = b"opacus-bridge/adaptor/nonce-v1";
+const CHALLENGE_TAG: &[u8] = b"opacus-bridge/adaptor/chal-v1";
 
 /// Reduce a 64-byte hash into the scalar field (wide reduction, no bias
 /// concern for the nonce/challenge of a Schnorr scheme over F_l).
@@ -238,7 +238,7 @@ pub fn verify_full(full_sig: &[u8; 64], msg: &[u8], a_pub: &[u8; 32]) -> bool {
     };
     let e = challenge(&r_bytes, a_pub, msg);
     // WG-21: the offer sidecar (swap_p2p::OfferAdaptor) pre-binds the
-    // one-time GHOST lock before any signature legs run; verify_full
+    // one-time OPACUS lock before any signature legs run; verify_full
     // stays the completed-signature check at claim time.
     s * B == r_point + e * a
 }
@@ -259,7 +259,7 @@ mod tests {
         (sk, a_pub)
     }
 
-    const MSG: &[u8] = b"ghost-bridge: claim xmr with preimage";
+    const MSG: &[u8] = b"opacus-bridge: claim xmr with preimage";
 
     #[test]
     fn adaptor_sign_verify_roundtrip() {

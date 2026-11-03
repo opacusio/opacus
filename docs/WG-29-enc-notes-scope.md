@@ -34,7 +34,7 @@ sealed note payload, and the sighash covers it.
   (spend.rs), MAX_BLOCK_SIZE = 2 MiB; N3 NOTE_PAYLOAD_MAX = 512.
 - The wallet crate has no NodeIdentity and no Address type (recon D1
   greps: 0 hits); key material comes from keys.rs (BIP-39 seed per ADR
-  r5; tags ghost_spend_derive_v2 / ghost_view_derive_v2).
+  r5; tags opacus_spend_derive_v2 / opacus_view_derive_v2).
 - The blake3-only ristretto ECIES (notes.rs:28-48 construction, 244-258
   keys/keystream) is proven code with a full negative-test suite; today
   seal/open consumers are all inside opacus-network (recon E2: 0 wallet
@@ -51,7 +51,7 @@ sealed note payload, and the sighash covers it.
   rejected. This binds the sealed payload to the sighash-covered
   commitment: a substituted note cannot match.
 - **D3 key model**: wallet-derived note keypair over ristretto:
-  note_sk = scalar(blake3("ghost_note_derive_v1" || seed)) (canonical
+  note_sk = scalar(blake3("opacus_note_derive_v1" || seed)) (canonical
   reduction), note_pk = [note_sk] * RISTRETTO_BASEPOINT_POINT.
   The sender seals each output to the RECIPIENT's note_pk, obtained
   out-of-band (an address format is a separate roadmap item; the swap
@@ -60,8 +60,8 @@ sealed note payload, and the sighash covers it.
 - **D4 ECIES**: same algebra as notes.rs (ephemeral ristretto scalar,
   blake3::derive_key keystream + keyed MAC, MAC verified before any
   decryption) with WG-29 domain tags: context strings
-  "ghost-encnote-v1 keystream" / "ghost-encnote-v1 mac", block tag
-  "ghost-encnote-ks-v1", MAC tag "ghost-encnote-mac-v1".
+  "opacus-encnote-v1 keystream" / "opacus-encnote-v1 mac", block tag
+  "opacus-encnote-ks-v1", MAC tag "opacus-encnote-mac-v1".
   In-tx wire form is BINARY (no hex): epk 32 || nonce 16 || ct 137 ||
   mac 32 = 217 B <= ENC_NOTE_MAX. The blob also fits the N3 backup
   channel (217 <= NOTE_PAYLOAD_MAX 512).
@@ -115,8 +115,8 @@ sealed note payload, and the sighash covers it.
 - O2: WG-26 sighash_v5 test vectors change in WP-C (documented,
   in-repo, same commit).
 - O3: doc drift observation - WG-26 scope R2 says the v5 sighash keeps
-  the b"GHOST/v4/sighash" domain with le64(5); the code uses
-  b"GHOST/v5/sighash" (spend.rs:285). WG-29 does not change the domain
+  the b"OPACUS/v4/sighash" domain with le64(5); the code uses
+  b"OPACUS/v5/sighash" (spend.rs:285). WG-29 does not change the domain
   string; the WG-26 doc line is stale.
 - O4: WP-1 evidence chain (swap.rs removal commit) is still open on
   this repo (recon B recorded the pre-edit lib.rs pin; HEAD a901c23 =

@@ -1,7 +1,7 @@
 /target/
 **/*.rs.bk
-.ghost/
-ghost-data/
+.opacus/
+opacus-data/
 wallet.dat
 *.wallet
 *.seed
@@ -13,7 +13,7 @@ mnemonic.txt
 *.bak-tx
 *.bak-zkint
 
-# -- publish_ghost.ps1: secrets & local artifacts (do not remove)
+# -- publish_opacus.ps1: secrets & local artifacts (do not remove)
 deployer.key
 deployer.key.*
 *.key

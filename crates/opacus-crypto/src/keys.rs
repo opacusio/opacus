@@ -7,8 +7,8 @@
 //!   -> 24-word BIP-39 phrase.
 //! - restore: strict BIP-39 validation (wordlist membership + checksum);
 //!   `seed = PBKDF2-HMAC-SHA512(phrase, "mnemonic"+passphrase, 2048)`.
-//! - spend/view: `blake3("ghost_spend_derive_v2" || seed)` and
-//!   `blake3("ghost_view_derive_v2" || seed)`. v1 tags are retired and v1
+//! - spend/view: `blake3("opacus_spend_derive_v2" || seed)` and
+//!   `blake3("opacus_view_derive_v2" || seed)`. v1 tags are retired and v1
 //!   pseudo-mnemonics are rejected by the restore path.
 
 use bip39::{Language, Mnemonic};
@@ -46,7 +46,7 @@ impl SpendingKey {
 
     /// Strict BIP-39 restore path (empty passphrase). Rejects anything
     /// failing wordlist membership or checksum, including all v1
-    /// pseudo-mnemonics ("ghost <hex chunks>").
+    /// pseudo-mnemonics ("opacus <hex chunks>").
     pub fn from_mnemonic(mnemonic: &str) -> Result<Self, KeyError> {
         Self::from_mnemonic_with_passphrase(mnemonic, "")
     }
@@ -63,11 +63,11 @@ impl SpendingKey {
     fn from_parts(mnemonic: Mnemonic, passphrase: &str) -> Self {
         let mut seed: [u8; 64] = mnemonic.to_seed(passphrase);
         let mut h = Hasher::new();
-        h.update(b"ghost_spend_derive_v2");
+        h.update(b"opacus_spend_derive_v2");
         h.update(&seed);
         let spend: [u8; 32] = h.finalize().into();
         let mut h = Hasher::new();
-        h.update(b"ghost_view_derive_v2");
+        h.update(b"opacus_view_derive_v2");
         h.update(&seed);
         let view: [u8; 32] = h.finalize().into();
         seed.zeroize();
@@ -83,26 +83,27 @@ impl SpendingKey {
 mod tests {
     use super::*;
 
-    // Official BIP-39 English vectors (zero entropies; TREZOR passphrase row).
-    // Computed independently per the BIP-39 spec (SHA256 checksum +
-    // PBKDF2-HMAC-SHA512, 2048 iterations, salt "mnemonic"+passphrase) and
-    // cross-checked against the published Trezor vector set.
+    // Official BIP-39 English phrases (zero entropies; TREZOR passphrase row).
+    // The PBKDF2 seeds are the published BIP-39/Trezor values; the spend/view
+    // keys are the project derivation (blake3 domain tags) pinned over those
+    // official seeds - recomputed after the rebrand pass renamed the
+    // derivation tags, the phrase/seed rows stay the published standards.
     const V12_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     const V12_SEED: &str = "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4";
-    const V12_SPEND: &str = "0ce2839064712b672eb7bf66382ee6d07b3f5889079054d8f00843cd14653a0d";
-    const V12_VIEW: &str = "2989d3395f72bca4a611ffa68ddf402120fb8bec4218641b35dd6912480e4773";
+    const V12_SPEND: &str = "6f6d55c49b23981208709260eb309e55b823b28cbe9ca455067073e73fda1f57";
+    const V12_VIEW: &str = "d60fbde7261110f10026ebccd5de6938f94a1cfd542bf32d4d9045c52efb73ac";
 
     const V12_TREZOR_SEED: &str = "c55257c360c07c72029aebc1b53c05ed0362ada38ead3e3e9efa3708e53495531f09a6987599d18264c1e1c92f2cf141630c7a3c4ab7c81b2f001698e7463b04";
     const V12_TREZOR_SPEND: &str =
-        "36d2e8e4bad52d1035681e13e293c0e12c9e4b2006df97df6eb5034d223eb9e9";
+        "d4f85d4e6da76837c6f7f4043ef1f3a6952ab67e9ca0c7ef6a4e107d839fd389";
     const V12_TREZOR_VIEW: &str =
-        "1f46e7582155d430365ed2ad3df6aa83ceff758c642138fc7fde2588f6a68acf";
+        "270512018ff5321f38f8565f4e76854e64fc642ffbc350f2bdecc5bdf4995c25";
 
     const V15_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon address";
     const V18_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon agent";
     const V24_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
-    const V24_SPEND: &str = "e50a17b0a81d06eb5157e28453465f944f2198cfbfe93e057414f43274ae9528";
-    const V24_VIEW: &str = "aa282a13394f98ddf0940540fa67e656a41a2dabf4e5e9c98565065aff05c8e2";
+    const V24_SPEND: &str = "5ca71cfe470cffe4ceb1f38e120f84ed86314a3f492019a1d8d409cd7d79f1bd";
+    const V24_VIEW: &str = "b99996fdffada49458f06ca366c6abd15eae4db73c92744325fa29c0e1715e48";
 
     const V7F12_PHRASE: &str =
         "legal winner thank year wave sausage worth useful legal winner thank yellow";
@@ -158,9 +159,10 @@ mod tests {
 
     #[test]
     fn wordlist_rejection_and_v1_rejected() {
-        // v1-style pseudo-mnemonic: 11 hex-chunk tokens are not words ('ghost' itself is BIP-39 English word 780)
+        // v1-style pseudo-mnemonic: 11 hex-chunk tokens are not words (the
+        // leading token is a real BIP-39 word, the phrase is still rejected)
         let v1 =
-            "ghost 0a1b2c 1b2c3d 2c3d4e 3d4e5f 4e5f60 5f6061 606162 616263 626364 636465 646566";
+            "abandon 0a1b2c 1b2c3d 2c3d4e 3d4e5f 4e5f60 5f6061 606162 616263 626364 636465 646566";
         assert!(SpendingKey::from_mnemonic(v1).is_err());
         assert!(SpendingKey::from_mnemonic("notaword notaword notaword notaword notaword notaword notaword notaword notaword notaword notaword notaword").is_err());
     }

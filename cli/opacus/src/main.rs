@@ -1,4 +1,4 @@
-//! Ghost CLI
+//! Opacus CLI
 
 use clap::{Parser, Subcommand};
 use opacus_crypto::keys::SpendingKey;
@@ -18,9 +18,9 @@ const DEFAULT_NETWORK: &str = "mainnet";
 
 #[derive(Parser)]
 #[command(
-    name = "ghost",
+    name = "opacus",
     version,
-    about = "Ghost: Private. Instant. Bridgeable."
+    about = "Opacus: Private. Instant. Bridgeable."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -37,12 +37,12 @@ enum Commands {
         /// - Node-1; an unknown value refuses startup).
         #[arg(long, default_value = DEFAULT_NETWORK)]
         network: String,
-        /// Node data dir (default ~/.ghost). Pass a fresh path for a
+        /// Node data dir (default ~/.opacus). Pass a fresh path for a
         /// clean-boot smoke run.
         #[arg(long)]
         data_dir: Option<PathBuf>,
     },
-    /// Mine Ghost
+    /// Mine Opacus
     Mine {
         #[arg(long)]
         pool: Option<String>,
@@ -109,7 +109,7 @@ async fn main() -> anyhow::Result<()> {
 fn default_data_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".ghost")
+        .join(".opacus")
 }
 
 /// The daemon launch surface (WP-D2a): the network string and the data
@@ -126,15 +126,15 @@ fn daemon_config(network: String, data_dir: Option<PathBuf>, tor: bool) -> Daemo
 
 async fn start_node(tor: bool, network: String, data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let config = daemon_config(network, data_dir, tor);
-    println!("Starting Ghost Node... (Ctrl+C to stop)");
+    println!("Starting Opacus Node... (Ctrl+C to stop)");
     println!("  network:  {}", config.network);
     println!("  data dir: {}", config.data_dir.display());
     // Node-1: construct the daemon FIRST - an unknown network refuses
     // startup here, before any socket is bound or any file is written.
     let mut daemon = OpacusDaemon::new(config.clone())?;
     // R2 (WP-D2a): bind the authenticated p2p listener exactly like
-    // opacusd does. GHOST_NET=0 disables; GHOST_NET_PORT / GHOST_NET_ADDR
-    // / GHOST_NET_PEERS / GHOST_NET_ADVERTISE override the defaults
+    // opacusd does. OPACUS_NET=0 disables; OPACUS_NET_PORT / OPACUS_NET_ADDR
+    // / OPACUS_NET_PEERS / OPACUS_NET_ADVERTISE override the defaults
     // (documented in opacus_node::net_service).
     if !opacus_node::net_service::autostart(&config) {
         println!("p2p listener not started (disabled or failed to bind)");
@@ -171,14 +171,14 @@ async fn run_miner(
                 let key = SpendingKey::from_mnemonic(mnemonic.trim())?;
                 LightWallet::new(&key).get_address().to_string()
             } else {
-                println!("WARNING: no wallet found - empty address. Run: ghost create-wallet");
+                println!("WARNING: no wallet found - empty address. Run: opacus create-wallet");
                 String::new()
             }
         }
     };
     config.threads = threads;
 
-    println!("Ghost Miner");
+    println!("Opacus Miner");
     println!("  Mode:     {:?}", config.mode);
     println!("  Threads:  {}", config.effective_threads());
     println!(
@@ -259,13 +259,13 @@ fn show_address() -> anyhow::Result<()> {
     if path.exists() {
         println!("Address: {}", std::fs::read_to_string(&path)?.trim());
     } else {
-        println!("No wallet found. Run: ghost create-wallet");
+        println!("No wallet found. Run: opacus create-wallet");
     }
     Ok(())
 }
 
 fn show_balance() -> anyhow::Result<()> {
-    println!("Balance: 0.000000000 GHOST");
+    println!("Balance: 0.000000000 OPACUS");
     println!("  (node connection in v0.3)");
     Ok(())
 }
@@ -279,7 +279,7 @@ fn send(to: &str, amount: u64) -> anyhow::Result<()> {
 fn wallet_dir() -> anyhow::Result<PathBuf> {
     Ok(dirs::home_dir()
         .ok_or_else(|| anyhow::anyhow!("no home dir"))?
-        .join(".ghost")
+        .join(".opacus")
         .join("wallet"))
 }
 
@@ -289,7 +289,7 @@ mod tests {
 
     fn tmp_dir(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
-            "ghost-cli-test-{tag}-{}-{}",
+            "opacus-cli-test-{tag}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -302,7 +302,7 @@ mod tests {
     /// behavior) and no data-dir override is set.
     #[test]
     fn start_defaults_to_mainnet() {
-        let cli = Cli::parse_from(["ghost", "start"]);
+        let cli = Cli::parse_from(["opacus", "start"]);
         match cli.command {
             Commands::Start {
                 tor,
@@ -317,12 +317,12 @@ mod tests {
         }
     }
 
-    /// WP-D2a: `ghost start --network testnet --data-dir <fresh>` parses
+    /// WP-D2a: `opacus start --network testnet --data-dir <fresh>` parses
     /// both flags - the runbook R2 smoke command is a real surface.
     #[test]
     fn start_parses_network_and_data_dir() {
         let cli = Cli::parse_from([
-            "ghost",
+            "opacus",
             "start",
             "--network",
             "testnet",
@@ -351,13 +351,13 @@ mod tests {
         assert_eq!(cfg.rpc_port, 18081);
     }
 
-    /// WP-D2a: without --data-dir the node still targets ~/.ghost.
+    /// WP-D2a: without --data-dir the node still targets ~/.opacus.
     #[test]
-    fn daemon_config_defaults_to_home_dot_ghost() {
+    fn daemon_config_defaults_to_home_dot_opacus() {
         let cfg = daemon_config("mainnet".into(), None, false);
         assert_eq!(
             cfg.data_dir,
-            dirs::home_dir().expect("home dir").join(".ghost")
+            dirs::home_dir().expect("home dir").join(".opacus")
         );
         assert_eq!(cfg.network, "mainnet");
         assert!(!cfg.use_tor);

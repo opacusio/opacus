@@ -14,7 +14,7 @@ pub struct Commitment {
 }
 
 fn generator_h() -> RistrettoPoint {
-    let hash = blake3::hash(b"ghost_h_generator_v1");
+    let hash = blake3::hash(b"opacus_h_generator_v1");
     let mut buf = [0u8; 64];
     buf[..32].copy_from_slice(hash.as_bytes());
     RistrettoPoint::from_uniform_bytes(&buf)

@@ -1,4 +1,4 @@
-//! Ghost Cryptographic Primitives
+//! Opacus Cryptographic Primitives
 pub mod commitment;
 pub mod ecies;
 pub mod keys;
@@ -11,4 +11,4 @@ pub use keys::SpendingKey;
 pub use stealth::{PublicAddress, RecipientKeys, StealthAddress};
 
 pub const PROTOCOL_VERSION: u8 = 1;
-pub const GHOST_ATOMS_PER_UNIT: u64 = 1_000_000_000;
+pub const OPACUS_ATOMS_PER_UNIT: u64 = 1_000_000_000;

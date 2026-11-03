@@ -3,7 +3,7 @@ name = "opacus-zk"
 version = "0.9.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Halo2-based FCMP-style zero-knowledge membership proofs for Ghost"
+description = "Halo2-based FCMP-style zero-knowledge membership proofs for Opacus"
 
 [dependencies]
 halo2_proofs = "0.3"

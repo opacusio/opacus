@@ -2,7 +2,7 @@
 //!
 //! The token contract lives in `contracts/wOPACUS.sol`. Until it is
 //! deployed, set the address with [`set_wopacus`] at startup (or persist
-//! it in config). The legacy wGHOST deployment keeps its env fallback so
+//! it in config). The legacy wOPACUS deployment keeps its env fallback so
 //! pre-rename configs keep working until the redeploy round completes.
 
 use crate::abi::{encode_call, AbiArg};
@@ -23,7 +23,7 @@ pub fn set_wopacus(addr: Address) -> bool {
 /// 2. the `WOPACUS_ADDRESS` environment variable (0x-prefixed 20-byte hex);
 ///    a successfully parsed value is cached into the same slot, as if
 ///    [`set_wopacus`] had been called
-/// 3. the legacy `WGHOST_ADDRESS` variable (pre-rename configs)
+/// 3. the legacy `WOPACUS_ADDRESS` variable (pre-rename configs)
 /// 4. the zero address placeholder
 pub fn wopacus() -> Address {
     if let Some(addr) = WOPACUS.get() {
@@ -33,7 +33,7 @@ pub fn wopacus() -> Address {
         let _ = WOPACUS.set(addr);
         return addr;
     }
-    if let Some(addr) = env_address("WGHOST_ADDRESS") {
+    if let Some(addr) = env_address("WOPACUS_ADDRESS") {
         let _ = WOPACUS.set(addr);
         return addr;
     }

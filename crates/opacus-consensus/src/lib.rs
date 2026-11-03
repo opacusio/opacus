@@ -1,4 +1,4 @@
-//! Ghost Consensus Layer
+//! Opacus Consensus Layer
 pub mod block;
 pub mod transaction;
 pub mod v4;

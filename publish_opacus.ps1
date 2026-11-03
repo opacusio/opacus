@@ -1,7 +1,7 @@
 # =============================================================================
-# publish_ghost.ps1  v2  (ghost project - opacusio/opacus)
+# publish_opacus.ps1  v2  (opacus project - opacusio/opacus)
 #
-# Zero-typing GitHub publish of the ghost monorepo. Safe by construction:
+# Zero-typing GitHub publish of the opacus monorepo. Safe by construction:
 #
 #   STEP 0  sanity: git.exe found, project root present, repo present/init
 #   STEP 1  git identity forced LOCAL (kopylovap-prog + noreply e-mail),
@@ -76,7 +76,7 @@ function GhRun {
 }
 
 Write-Output '============================================================='
-Write-Output ' publish_ghost v2: safe zero-typing GitHub publish'
+Write-Output ' publish_opacus v2: safe zero-typing GitHub publish'
 Write-Output '============================================================='
 
 # ---------------- STEP 0: sanity ----------------
@@ -129,7 +129,7 @@ if ($e -ne $GitMail) {
 Write-Output ''
 Write-Output 'STEP 2: .gitignore guards + README'
 $need = @(
-    '# -- publish_ghost.ps1: secrets & local artifacts (do not remove)',
+    '# -- publish_opacus.ps1: secrets & local artifacts (do not remove)',
     'deployer.key',
     'deployer.key.*',
     '*.key',
@@ -162,21 +162,21 @@ if ($missing.Count -gt 0) {
 }
 if (-not (Test-Path -LiteralPath $ReadMe)) {
     $rm = @(
-        '# Ghost',
+        '# Opacus',
         '',
         'Privacy payment network: Monero-style ring-CT fused with Zcash-style Halo2',
-        'FCMP++ spend proofs, an Ethereum-side wrapped token (wGHOST) and DEX/bridge',
+        'FCMP++ spend proofs, an Ethereum-side wrapped token (wOPACUS) and DEX/bridge',
         'tooling.',
         '',
         '- crates/ - Rust workspace: opacus-zk (Halo2 IPA circuits, real prover),',
         '  opacus-wallet (shielded spend flow), opacus-bridge (Monero DLEq / atomic swap /',
         '  RPC), opacus-dex (Uniswap calldata, EIP-155 signer)',
-        '- contracts/ - wGHOST.sol (quorum-mint ERC20 wrapper) + forge test suite',
+        '- contracts/ - wOPACUS.sol (quorum-mint ERC20 wrapper) + forge test suite',
         '- zero-typing Sepolia deploy pipeline at the repo root:',
-        '  run_sepolia_deploy.ps1 -> deploy_wghost.ps1 -> finalize_wghost.ps1',
+        '  run_sepolia_deploy.ps1 -> deploy_wopacus.ps1 -> finalize_wopacus.ps1',
         '',
         'Status: testnet. opacus-zk: real IPA spend proof at mainnet tree depth (2^32).',
-        'wGHOST: deployed on Sepolia (contracts/wghost.address), quorum 1/1.',
+        'wOPACUS: deployed on Sepolia (contracts/wopacus.address), quorum 1/1.',
         'Value conservation in-circuit is planned (v0.4). AUDIT REQUIRED before any',
         'mainnet use. Testnet keys are throwaway and never committed.'
     )
@@ -221,7 +221,7 @@ Write-Output ''
 Write-Output 'STEP 4: commit + branch'
 GitRun diff --cached --quiet | Out-Null
 if ($LASTEXITCODE -eq 1) {
-    $msg = 'ghost: monorepo - zk FCMP++ (Halo2), wallet, bridge, dex, swap, wGHOST Sepolia deploy chain'
+    $msg = 'opacus: monorepo - zk FCMP++ (Halo2), wallet, bridge, dex, swap, wOPACUS Sepolia deploy chain'
     GitRun commit -m $msg | ForEach-Object { Write-Output ('  {0}' -f $_) }
     if ($LASTEXITCODE -ne 0) { Die 'git commit failed' }
 } elseif ($LASTEXITCODE -ne 0) {
@@ -301,7 +301,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Output ''
 Write-Output '============================================================='
-Write-Output ' GHOST PUBLISH COMPLETE'
+Write-Output ' OPACUS PUBLISH COMPLETE'
 Write-Output '============================================================='
 Write-Output '  repo:   https://github.com/opacusio/opacus'
 Write-Output '  pushed: main (source, contracts, deploy scripts, docs)'

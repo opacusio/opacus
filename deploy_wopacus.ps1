@@ -1,16 +1,16 @@
 # =============================================================================
-# deploy_wghost.ps1  (ghost project - opacusio/opacus)
+# deploy_wopacus.ps1  (opacus project - opacusio/opacus)
 #
 # PURPOSE
-#   Full forge pipeline for the wGHOST bridge token, End-to-End rehearsed on
+#   Full forge pipeline for the wOPACUS bridge token, End-to-End rehearsed on
 #   a local anvil chain before this script was generated:
 #     STEP 1  locate or install Foundry (Windows release from GitHub)
-#     STEP 2  patch contracts\wGHOST.sol (3 real defects found by rehearsal)
+#     STEP 2  patch contracts\wOPACUS.sol (3 real defects found by rehearsal)
 #             + write the 5-test suite + foundry.toml (all idempotent)
 #     STEP 3  forge build        (solc 0.8.24, optimizer on)
 #     STEP 4  forge test         (mint/burn, ERC20, quorum, replay guard)
 #     STEP 5  forge create --broadcast on Sepolia (needs env vars, see below)
-#             -> contracts\wghost.address + on-chain bytecode verification
+#             -> contracts\wopacus.address + on-chain bytecode verification
 #   Without DEPLOYER_PRIVATE_KEY the script stops after STEP 4 (build-only).
 #
 #   Environment (deploy only):
@@ -28,10 +28,10 @@ Set-StrictMode -Version Latest
 
 $ProjectRoot = "$PSScriptRoot"
 $Contracts = Join-Path $ProjectRoot "contracts"
-$Sol = Join-Path $Contracts "wGHOST.sol"
+$Sol = Join-Path $Contracts "wOPACUS.sol"
 $Toml = Join-Path $Contracts "foundry.toml"
-$TestSol = Join-Path $Contracts "WGHOSTTest.t.sol"
-$AddrFile = Join-Path $Contracts "wghost.address"
+$TestSol = Join-Path $Contracts "WOPACUSTest.t.sol"
+$AddrFile = Join-Path $Contracts "wopacus.address"
 
 if (-not (Test-Path -LiteralPath $Sol)) {
     Write-Output "[!] NOT FOUND: $Sol"
@@ -61,7 +61,7 @@ if (-not $Forge) {
     } catch {
         Write-Output "  [!] GitHub API unreachable - using pinned v1.8.5 URL"
     }
-    $zip = Join-Path $env:TEMP "foundry_ghost_win.zip"
+    $zip = Join-Path $env:TEMP "foundry_opacus_win.zip"
     Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 600
     $dst = "$ProjectRoot\tools\foundry"
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
@@ -85,15 +85,15 @@ if ($Forge -match ' ' -or $Contracts -match ' ') {
 $vOut = cmd /c ($Forge + ' --version 2>&1')
 $vOut | ForEach-Object { Write-Output ("  {0}" -f $_) }
 
-# --- STEP 2: patch wGHOST.sol + write test suite + foundry.toml ------------------
-Write-Output "STEP 2: patch wGHOST.sol (rehearsal fixes) + test suite + foundry.toml"
+# --- STEP 2: patch wOPACUS.sol + write test suite + foundry.toml ------------------
+Write-Output "STEP 2: patch wOPACUS.sol (rehearsal fixes) + test suite + foundry.toml"
 $raw = [System.IO.File]::ReadAllText($Sol)
 $nl = "`n"
 if ($raw.Contains("`r`n")) { $nl = "`r`n" }
 $solText = $raw.Replace("`r`n", "`n")
 
 if ($solText.Contains("usedLock")) {
-    Write-Output "  [=] wGHOST.sol already patched (usedLock marker present)"
+    Write-Output "  [=] wOPACUS.sol already patched (usedLock marker present)"
 } elseif ($solText.Contains("i.offset")) {
 
 $oldA = (@(
@@ -113,7 +113,7 @@ $newA = (@(
 '            bytes32 r;',
 '            bytes32 s;',
 '            uint8 v;',
-'            require(uint8(sig[64]) < 2, "wGHOST: v");',
+'            require(uint8(sig[64]) < 2, "wOPACUS: v");',
 '            r = bytes32(sig[0:32]);',
 '            s = bytes32(sig[32:64]);',
 '            v = uint8(sig[64]) + 27;',
@@ -129,23 +129,23 @@ $newB = (@(
 '    address[] public quorum;',
 '    uint256 public quorumThreshold;',
 '',
-'    /// Ghost lock tx hashes already minted (replay guard: 1 lock = 1 mint).',
+'    /// Opacus lock tx hashes already minted (replay guard: 1 lock = 1 mint).',
 '    mapping(bytes32 => bool) private usedLock;'
 ) -join "`n")
 
 $oldC = (@(
 '        bytes32 digest = keccak256(',
-'            abi.encodePacked("ghost-lock-v1", to, value, ghostTxHash)',
+'            abi.encodePacked("opacus-lock-v1", to, value, opacusTxHash)',
 '        );',
 '        _checkQuorum(digest, sigs);',
 '        totalSupply += value;'
 ) -join "`n")
 
 $newC = (@(
-'        require(!usedLock[ghostTxHash], "wGHOST: used");',
-'        usedLock[ghostTxHash] = true;',
+'        require(!usedLock[opacusTxHash], "wOPACUS: used");',
+'        usedLock[opacusTxHash] = true;',
 '        bytes32 digest = keccak256(',
-'            abi.encodePacked("ghost-lock-v1", to, value, ghostTxHash)',
+'            abi.encodePacked("opacus-lock-v1", to, value, opacusTxHash)',
 '        );',
 '        _checkQuorum(digest, sigs);',
 '        totalSupply += value;'
@@ -153,7 +153,7 @@ $newC = (@(
 
     foreach ($pair in @(@($oldA, $newA, "A: assembly -> calldata slicing"), @($oldB, $newB, "B: usedLock state"), @($oldC, $newC, "C: mint replay guard"))) {
         if (-not $solText.Contains($pair[0])) {
-            Write-Output ("[!] patch {0}: expected block not found - paste wGHOST.sol back to the assistant" -f $pair[2])
+            Write-Output ("[!] patch {0}: expected block not found - paste wOPACUS.sol back to the assistant" -f $pair[2])
             exit 1
         }
         $solText = $solText.Replace($pair[0], $pair[1])
@@ -164,21 +164,21 @@ $newC = (@(
     [System.IO.File]::WriteAllText($Sol, $solText.Replace("`n", $nl), (New-Object System.Text.UTF8Encoding($false)))
     Write-Output ("  [+] written: {0} (backup: {1})" -f $Sol, $bakSol)
 } else {
-    Write-Output "[!] wGHOST.sol has neither 'usedLock' nor 'i.offset' - unknown content"
-    Write-Output "    paste contracts\wGHOST.sol back to the assistant"
+    Write-Output "[!] wOPACUS.sol has neither 'usedLock' nor 'i.offset' - unknown content"
+    Write-Output "    paste contracts\wOPACUS.sol back to the assistant"
     exit 1
 }
 
 if (Test-Path -LiteralPath $TestSol) {
-    Write-Output "  [=] WGHOSTTest.t.sol already present"
+    Write-Output "  [=] WOPACUSTest.t.sol already present"
 } else {
     $testLines = @(
 '// SPDX-License-Identifier: MIT',
 'pragma solidity ^0.8.20;',
 '',
-'import "./wGHOST.sol";',
+'import "./wOPACUS.sol";',
 '',
-'/// Minimal e2e test for WGHOST (no forge-std dependency).',
+'/// Minimal e2e test for WOPACUS (no forge-std dependency).',
 'interface VmI {',
 '    function addr(uint256 pk) external returns (address);',
 '    function sign(uint256 pk, bytes32 digest)',
@@ -187,10 +187,10 @@ if (Test-Path -LiteralPath $TestSol) {
 '    function expectRevert(bytes memory) external;',
 '}',
 '',
-'contract WGHOSTTest {',
+'contract WOPACUSTest {',
 '    VmI constant vm = VmI(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);',
 '',
-'    WGHOST token;',
+'    WOPACUS token;',
 '    address holder;',
 '    uint256 constant VALUE = 1000 ether;',
 '',
@@ -198,7 +198,7 @@ if (Test-Path -LiteralPath $TestSol) {
 '        holder = vm.addr(1);',
 '        address[] memory members = new address[](1);',
 '        members[0] = holder;',
-'        token = new WGHOST(members, 1);',
+'        token = new WOPACUS(members, 1);',
 '    }',
 '',
 '    function _sig(bytes32 digest) internal returns (bytes[] memory sigs) {',
@@ -209,7 +209,7 @@ if (Test-Path -LiteralPath $TestSol) {
 '',
 '    function _digest(address to, uint256 value, bytes32 h)',
 '        internal pure returns (bytes32) {',
-'        return keccak256(abi.encodePacked("ghost-lock-v1", to, value, h));',
+'        return keccak256(abi.encodePacked("opacus-lock-v1", to, value, h));',
 '    }',
 '',
 '    function testMintBurnFlow() public {',
@@ -220,7 +220,7 @@ if (Test-Path -LiteralPath $TestSol) {
 '        assertEq(token.totalSupply(), VALUE, "mint supply");',
 '',
 '        vm.prank(holder);',
-'        token.burn(VALUE, "ghost-recipient");',
+'        token.burn(VALUE, "opacus-recipient");',
 '        assertEq(token.balanceOf(holder), 0, "burn balance");',
 '        assertEq(token.totalSupply(), 0, "burn supply");',
 '    }',
@@ -245,7 +245,7 @@ if (Test-Path -LiteralPath $TestSol) {
 '        bytes32 h = keccak256("xmr-lock-tx-3");',
 '        // signature over a DIFFERENT digest -> recovered signer is not a member',
 '        bytes[] memory sigs = _sig(keccak256("wrong-digest"));',
-'        vm.expectRevert(bytes("wGHOST: quorum"));',
+'        vm.expectRevert(bytes("wOPACUS: quorum"));',
 '        token.mint(holder, VALUE, h, sigs);',
 '    }',
 '',
@@ -257,7 +257,7 @@ if (Test-Path -LiteralPath $TestSol) {
 '        sigs[0] = abi.encodePacked(r, s, bytes1(uint8(v - 27)));',
 '        sigs[1] = abi.encodePacked(r, s, bytes1(uint8(v - 27)));',
 '        // duplicate signer violates the strictly-sorted requirement',
-'        vm.expectRevert(bytes("wGHOST: sig order"));',
+'        vm.expectRevert(bytes("wOPACUS: sig order"));',
 '        token.mint(holder, VALUE, h, sigs);',
 '    }',
 '',
@@ -265,8 +265,8 @@ if (Test-Path -LiteralPath $TestSol) {
 '        bytes32 h = keccak256("xmr-lock-tx-5");',
 '        bytes[] memory sigs = _sig(_digest(holder, VALUE, h));',
 '        token.mint(holder, VALUE, h, sigs);',
-'        // same ghost tx hash minted twice -> supply inflation guard',
-'        vm.expectRevert(bytes("wGHOST: used"));',
+'        // same opacus tx hash minted twice -> supply inflation guard',
+'        vm.expectRevert(bytes("wOPACUS: used"));',
 '        token.mint(holder, VALUE, h, sigs);',
 '    }',
 '',
@@ -287,7 +287,7 @@ if (Test-Path -LiteralPath $Toml) {
     }
 } else {
     $tomlLines = @(
-'# foundry config for the Ghost wGHOST contract (generated by deploy_wghost.ps1)',
+'# foundry config for the Opacus wOPACUS contract (generated by deploy_wopacus.ps1)',
 '[profile.default]',
 'src = "."',
 'out = "out"',
@@ -310,11 +310,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- STEP 4: forge test ----------------------------------------------------------
-Write-Output "STEP 4: forge test (WGHOST suite)"
+Write-Output "STEP 4: forge test (WOPACUS suite)"
 $tOut = cmd /c ($Forge + ' test --root ' + $Contracts + ' 2>&1')
 $tOut | ForEach-Object { Write-Output ("  {0}" -f $_) }
 if ($LASTEXITCODE -ne 0) {
-    Write-Output "WGHOST SUITE FAILED - paste the output above back to the assistant"
+    Write-Output "WOPACUS SUITE FAILED - paste the output above back to the assistant"
     exit 1
 }
 
@@ -362,7 +362,7 @@ if ($doDeploy) {
         exit 1
     }
     Write-Output ("  deployer (quorum 1/1): {0}" -f $dep)
-    $cLine = $Forge + ' create WGHOST --root ' + $Contracts + ' --rpc-url ' + $rpc + ' --private-key ' + $pk + ' --broadcast --constructor-args [' + $dep + '] 1 2>&1'
+    $cLine = $Forge + ' create WOPACUS --root ' + $Contracts + ' --rpc-url ' + $rpc + ' --private-key ' + $pk + ' --broadcast --constructor-args [' + $dep + '] 1 2>&1'
     $cOut = cmd /c $cLine
     $cOut | ForEach-Object { Write-Output ("  {0}" -f $_) }
     if ($LASTEXITCODE -ne 0) {
@@ -394,14 +394,14 @@ if ($doDeploy) {
 
 # --- banner -----------------------------------------------------------------------
 Write-Output ""
-Write-Output "WGHOST DEPLOY PIPELINE COMPLETE"
+Write-Output "WOPACUS DEPLOY PIPELINE COMPLETE"
 Write-Output ""
 Write-Output "What you got:"
-Write-Output "  wGHOST.sol fixed: assembly sig-decode bug, replay guard (1 lock = 1 mint),"
+Write-Output "  wOPACUS.sol fixed: assembly sig-decode bug, replay guard (1 lock = 1 mint),"
 Write-Output "    strict v-byte check - rehearsal-verified build + 5-test suite"
-Write-Output "  contracts\WGHOSTTest.t.sol: mint/burn, ERC20 round, quorum rejects"
+Write-Output "  contracts\WOPACUSTest.t.sol: mint/burn, ERC20 round, quorum rejects"
 Write-Output "  contracts\foundry.toml: solc 0.8.24 + optimizer"
-Write-Output "  backup: wGHOST.sol.bak-sol"
+Write-Output "  backup: wOPACUS.sol.bak-sol"
 if (Test-Path -LiteralPath $AddrFile) {
     Write-Output ("  deployed: {0}" -f (Get-Content -LiteralPath $AddrFile -TotalCount 1).Trim())
 }
@@ -409,16 +409,16 @@ Write-Output ""
 Write-Output "Next steps:"
 if ($skipDeploy -or (Test-Path -LiteralPath $AddrFile)) {
     Write-Output "  persist the address:"
-    Write-Output ("    setx WGHOST_ADDRESS {0}" -f (Get-Content -LiteralPath $AddrFile -TotalCount 1).Trim())
-    Write-Output "  then run: powershell -ExecutionPolicy Bypass -File .\wire_wghost_env.ps1"
-    Write-Output "  (opacus-dex wghost() will pick WGHOST_ADDRESS up automatically)"
+    Write-Output ("    setx WOPACUS_ADDRESS {0}" -f (Get-Content -LiteralPath $AddrFile -TotalCount 1).Trim())
+    Write-Output "  then run: powershell -ExecutionPolicy Bypass -File .\wire_wopacus_env.ps1"
+    Write-Output "  (opacus-dex wopacus() will pick WOPACUS_ADDRESS up automatically)"
 } else {
-    Write-Output "  to deploy wGHOST on Sepolia:"
+    Write-Output "  to deploy wOPACUS on Sepolia:"
     Write-Output "    1. fund a throwaway address (0.05 ETH is plenty):"
     Write-Output "       https://sepolia-faucet.pk910.de   https://faucets.chain.link/sepolia"
     Write-Output '    2. $env:SEPOLIA_RPC_URL = "https://<provider>/v3/<key>"'
     Write-Output '       $env:DEPLOYER_PRIVATE_KEY = "0x..."   # throwaway TESTNET key only'
-    Write-Output "    3. re-run: powershell -ExecutionPolicy Bypass -File .\deploy_wghost.ps1"
-    Write-Output "  then run wire_wghost_env.ps1 (env wiring for opacus-dex)"
+    Write-Output "    3. re-run: powershell -ExecutionPolicy Bypass -File .\deploy_wopacus.ps1"
+    Write-Output "  then run wire_wopacus_env.ps1 (env wiring for opacus-dex)"
 }
 Write-Output "  mainnet: multi-signer quorum + external audit FIRST (AUDIT REQUIRED)"

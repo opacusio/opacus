@@ -1181,7 +1181,7 @@ mod tests {
         let mut s = TcpStream::connect(b.local_addr().unwrap().to_string()).unwrap();
         // well-formed envelope carrying the SWAP protocol tag: the net
         // node must reject it as a protocol mismatch
-        let body = br#"{"protocol":"ghost-swap-p2p-v1","Hello":{"hello":{"version":1,"node_id":"aa","pe":"","pr":"","nonce":""}}}"#;
+        let body = br#"{"protocol":"opacus-swap-p2p-v1","Hello":{"hello":{"version":1,"node_id":"aa","pe":"","pr":"","nonce":""}}}"#;
         s.write_all(&(body.len() as u32).to_le_bytes()).unwrap();
         s.write_all(body).unwrap();
         s.flush().unwrap();
@@ -1247,16 +1247,16 @@ mod tests {
     }
 
     /// An Offer frame built the way an EXTERNAL peer would build it
-    /// (ghost-swap-p2p-v1 wire bytes).
+    /// (opacus-swap-p2p-v1 wire bytes).
     fn external_offer_wire() -> (String, Vec<u8>) {
         let preimage = [9u8; 32];
         let payload = SwapOfferPayload {
             xmr_piconero: 1_000_000_000_000,
-            ghost_atoms: 500_000_000,
+            opacus_atoms: 500_000_000,
             hashlock: hex_str(&hashlock_of(&preimage)),
             fund_timeout_blocks: 100,
             claim_timeout_blocks: 200,
-            maker_ghost_address: "ghost-maker-n3b".to_string(),
+            maker_opacus_address: "opacus-maker-n3b".to_string(),
             taker_xmr_address: "xmr-taker-n3b".to_string(),
         };
         let id = offer_id_of(&payload);

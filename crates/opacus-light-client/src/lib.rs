@@ -1,4 +1,4 @@
-//! Ghost Light Client
+//! Opacus Light Client
 
 pub mod compact_state;
 

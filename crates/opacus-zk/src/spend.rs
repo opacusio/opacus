@@ -1,4 +1,4 @@
-//! GHOST v0.4 Phase 2: the full v4 spend circuit.
+//! OPACUS v0.4 Phase 2: the full v4 spend circuit.
 //!
 //! Assembles the Phase 1a/1b gates into the single-proof v4 spend of the
 //! specification (`docs/specs/v0.4-value-conservation.md`, referenced below
@@ -32,7 +32,7 @@
 //!   tree_entry(L) = Poseidon_3(L.x, L.y, DOM_ACC)
 //! ```
 //!
-//! with `DOM_ACC = blake3("GHOST/v4/dom/acc")` reduced into `Fp` (the
+//! with `DOM_ACC = blake3("OPACUS/v4/dom/acc")` reduced into `Fp` (the
 //! [S4 2] domain pattern; pinned test vector below). `tree_entry` is a
 //! public function of the point alone, so consensus can maintain the
 //! frontier over `tree_entry(L_j)` while publishing `L_j` [S4 3, S4 9],
@@ -173,7 +173,7 @@ fn fq_from_32(b: &[u8; 32]) -> Fq {
 /// Domain constant of the accumulator tree entry (this module's Phase 2
 /// convention, see the module docs).
 pub fn dom_acc() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/acc")
+    fp_from_label(b"OPACUS/v4/dom/acc")
 }
 
 /// Affine coordinates of a Pallas point (the Phase 1b `coords` helper).
@@ -225,7 +225,7 @@ pub fn swap_leaf_entry_v2(d: Fp, a: Fp, b: Fp, v: u64, rho: Fp, h: Fp) -> Fp {
 // ---------------------------------------------------------------------------
 
 /// Transaction sighash [S4 7]:
-/// `S = blake3("GHOST/v4/sighash", le64(version = 4), acc_root, N_1..N_n,
+/// `S = blake3("OPACUS/v4/sighash", le64(version = 4), acc_root, N_1..N_n,
 /// L_1..L_m, RC_in_1..RC_in_n, RC_out_1..RC_out_m, le64(fee))`.
 ///
 /// Points are compressed (`GroupEncoding::to_bytes`), field elements are
@@ -240,7 +240,7 @@ pub fn sighash_v4(
     fee: u64,
 ) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v4/sighash");
+    h.update(b"OPACUS/v4/sighash");
     h.update(&4u64.to_le_bytes());
     h.update(root.to_affine().to_bytes().as_ref());
     for n in ns {
@@ -264,7 +264,7 @@ pub fn sighash_v4(
 
 /// WG-26 v5 transaction sighash [S4 12 3.6]: the v5 stream covers every
 /// serialized field consumed by verification INCLUDING the swap tail:
-/// `S = blake3("GHOST/v5/sighash", le64(version = 5), acc_root, N_1..N_n,
+/// `S = blake3("OPACUS/v5/sighash", le64(version = 5), acc_root, N_1..N_n,
 /// L_1..L_m, RC_in_1..RC_in_n, RC_out_1..RC_out_m, le64(fee),
 /// le64(flag), le64(idx), H, s0, s1, entry)`.
 ///
@@ -293,7 +293,7 @@ pub fn sighash_v5(
     enc_notes: &[Vec<u8>],
 ) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v5/sighash");
+    h.update(b"OPACUS/v5/sighash");
     h.update(&5u64.to_le_bytes());
     h.update(root.to_affine().to_bytes().as_ref());
     for n in ns {
@@ -363,10 +363,10 @@ pub fn binding_vk(rc_in: &[pallas::Point], rc_out: &[pallas::Point], fee: u64) -
 }
 
 /// Fiat-Shamir challenge of the binding signature:
-/// `e = H("GHOST/v4/bind", S, bvk)` reduced into `Fq` [S4 6].
+/// `e = H("OPACUS/v4/bind", S, bvk)` reduced into `Fq` [S4 6].
 fn bind_challenge(s: &[u8; 32], bvk: &pallas::Point) -> Fq {
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v4/bind");
+    h.update(b"OPACUS/v4/bind");
     h.update(s);
     h.update(bvk.to_affine().to_bytes().as_ref());
     fq_from_32(h.finalize().as_bytes())
@@ -381,7 +381,7 @@ fn bind_challenge(s: &[u8; 32], bvk: &pallas::Point) -> Fq {
 pub fn sign_bind(s: &[u8; 32], bsk: Fq, bvk: &pallas::Point) -> [u8; 64] {
     let r_gen = blind_gen();
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v4/bind/nonce");
+    h.update(b"OPACUS/v4/bind/nonce");
     h.update(bsk.to_repr().as_ref());
     h.update(s);
     h.update(bvk.to_affine().to_bytes().as_ref());
@@ -2902,8 +2902,10 @@ mod tests {
         assert_eq!(leaf_gen() * bits_scalar, host);
     }
 
-    // Pinned test vector (blake3-derived, stable across platforms).
-    const DOM_ACC_HEX: &str = "303dfa0e04d8ec09da5be1d62e99f01200000000000000000000000000000000";
+    // Pinned test vector (blake3-derived, stable across platforms;
+    // refreshed by the rebrand pass - the domain label moved to
+    // OPACUS/v4, the pin is the value the renamed label derives).
+    const DOM_ACC_HEX: &str = "818be9f5257d99ca36a7e4e5a21ccf1000000000000000000000000000000000";
 }
 
 // ---------------------------------------------------------------------------

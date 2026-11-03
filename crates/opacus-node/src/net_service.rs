@@ -11,11 +11,11 @@
 //! data dir (`network-identity.json`, `peers.json`). Env knobs:
 //!
 //! ```text
-//! GHOST_NET=0                  disable the net node
-//! GHOST_NET_PORT=n             listen port (default: daemon p2p_port, 18080)
-//! GHOST_NET_ADDR=ip:port       full listen addr override (default 0.0.0.0:port)
-//! GHOST_NET_PEERS=a:b,c:d      bootstrap dials
-//! GHOST_NET_ADVERTISE=ip:port  advertised dial addr (default 127.0.0.1:port)
+//! OPACUS_NET=0                  disable the net node
+//! OPACUS_NET_PORT=n             listen port (default: daemon p2p_port, 18080)
+//! OPACUS_NET_ADDR=ip:port       full listen addr override (default 0.0.0.0:port)
+//! OPACUS_NET_PEERS=a:b,c:d      bootstrap dials
+//! OPACUS_NET_ADVERTISE=ip:port  advertised dial addr (default 127.0.0.1:port)
 //! ```
 
 use std::path::Path;
@@ -72,17 +72,17 @@ pub fn autostart(config: &DaemonConfig) -> bool {
     if global().is_some() {
         return true;
     }
-    if std::env::var("GHOST_NET").as_deref() == Ok("0") {
+    if std::env::var("OPACUS_NET").as_deref() == Ok("0") {
         return false;
     }
-    let port = std::env::var("GHOST_NET_PORT")
+    let port = std::env::var("OPACUS_NET_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(config.p2p_port);
-    let listen = std::env::var("GHOST_NET_ADDR").unwrap_or_else(|_| format!("0.0.0.0:{port}"));
+    let listen = std::env::var("OPACUS_NET_ADDR").unwrap_or_else(|_| format!("0.0.0.0:{port}"));
     let advertise =
-        std::env::var("GHOST_NET_ADVERTISE").unwrap_or_else(|_| format!("127.0.0.1:{port}"));
-    let bootstrap: Vec<String> = std::env::var("GHOST_NET_PEERS")
+        std::env::var("OPACUS_NET_ADVERTISE").unwrap_or_else(|_| format!("127.0.0.1:{port}"));
+    let bootstrap: Vec<String> = std::env::var("OPACUS_NET_PEERS")
         .ok()
         .map(|s| {
             s.split(',')

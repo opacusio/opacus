@@ -363,12 +363,14 @@ items answer the open questions of section 8 in order.
   minutes - the replay test pins both over the committed vectors,
   re-verifies every accepted proof at mainnet depth and re-derives the
   decision rule, all inside the ordinary debug test budget (~12 s).
-  Artifact hashes (sha256): declared.json
-  751b53af47f02f3f38bf57aed788fc0c21ba6c9adcb64614ed91fee5aaeafe0c;
+  Artifact hashes (sha256, refreshed by the rebrand pass - the R0
+  example is byte-frozen, only the domain tags under it moved):
+  declared.json
+  27761a7923a5681131c6884bc2dff3d7c81ebba504c9748324efe3beeedee0b7;
   golden-vectors.json
-  0ae48ba5e4be993852805cbd5e74ae6e24900ab34fdff2044288fc9aee4f601a;
+  ba1657f9dcfb00b4465700e4cdfa4df392b2d16aa3ee676da35ee925ac194107;
   minutes.json
-  d3ba6a46d7256927824ed80726a3eb04047de7485b85d84169808c6699ec153a.
+  49ae9f5d976befb6d745d899e2603a86eb89fe1177e67c16725776e8c84b0f5f.
 
   WP-D1 stage note (runbook stage R1 executed): the two-process
   rehearsal over a drop directory is delivered as three small bins -
@@ -396,7 +398,7 @@ items answer the open questions of section 8 in order.
   nothing fatal, nothing silently dropped; the close statement is
   Accepted (yes 58.3e9 / no 10.5e9 / abstain 12.5e9, accepted 7 /
   rejected 2) with `result_hash`
-  9d895082ae00822a4aebac85202386eee9036d35e61f7795795b7a4daa7672d0 -
+  2e25d244a287d782bc90c5a1cc3ec80859e134da6968f4577bfb3b221cb76053 -
   BYTE-EQUAL to the R0 golden vector: moving the whole protocol across
   real serialization boundaries does not move the decision (P-5);
   `archive_id` differs, as it must - fresh blinding bytes, a different
@@ -410,36 +412,37 @@ items answer the open questions of section 8 in order.
   `crates/opacus-wallet/tests/vectors/dress-r1/` (16 drops + the
   declaration + the minutes) replay clean and fail the two tamper
   cases with zero proving; the full two-process flow (9 real prover
-  runs) ships as the ignored e2e test. Artifact hashes (sha256):
-  dress-r1/declared.json
-  2b87bef180edb1057be321ced582c2211f1286c874dd5e50b2c1209c799ad639;
+  runs) ships as the ignored e2e test. Artifact hashes (sha256,
+  refreshed by the rebrand pass - same seed, same 16-drop shape, new
+  domain tags): dress-r1/declared.json
+  4e938b0c4073563703e4c973fd51463f118178619d3c9da8b868fab748cffe1e;
   dress-r1/minutes.json
-  a581c5af0bc96a4bdf0d4e3665ec3aa07291e089f5703c533f4473cfc3d35609.
+  4f2bc684d608b8cc6dd7504bf086679c417fde292b98e3bc884192abd5e7d0d2.
 
   WP-D2a stage note (runbook stage R2 executed): the single-node
   testnet smoke is delivered as the CLI launch surface
-  `cli/opacus/src/main.rs`: `ghost start` grows the `--network` flag
+  `cli/opacus/src/main.rs`: `opacus start` grows the `--network` flag
   (default "mainnet" - the pre-flag behavior is preserved; the value
   flows verbatim into `DaemonConfig` and is validated by the daemon,
   Node-1, so a typo refuses startup BEFORE any socket is bound or any
   file is written), the `--data-dir` flag (the "fresh data_dir"
   definition of done becomes testable without touching the real home
-  dir), and the p2p autostart wiring - `ghost start` now calls
+  dir), and the p2p autostart wiring - `opacus start` now calls
   `opacus_node::net_service::autostart` exactly like opacusd, because
   the stage-log item "p2p listener bound" needs a real listener
-  (GHOST_NET=0 still disables it; the flag order is daemon-first, so
-  an invalid network can never bind). The runbook commands say
-  `./target/release/ghost`, but the built binary was `opacus` - a
-  second bin target `ghost` (same main.rs) makes the runbook command
-  literally true. Six new bin-crate tests pin the surface: defaults
+  (OPACUS_NET=0 still disables it; the flag order is daemon-first, so
+  an invalid network can never bind). The runbook commands and the
+  built binary agree on one canonical name: the single bin target
+  `opacus` (same main.rs as the former second alias target, which the
+  rebrand pass removed). Six new bin-crate tests pin the surface: defaults
   (mainnet, no data-dir override, no tor), the R2 smoke command
   parses, flags land in `DaemonConfig` with the daemon port defaults,
   the home default, the typo refusal with zero side effects, and a
   testnet boot over a fresh dir. The smoke itself ran on rustc
   1.99.1 release: negative boot `--network mainet` -> exit 1, no data
-  dir, no socket; `ghost start --network testnet --data-dir <fresh>`
+  dir, no socket; `opacus start --network testnet --data-dir <fresh>`
   -> "consensus: net=testnet | v4_activation_height=0 | fee_floor=0",
-  the net node listening on 0.0.0.0:18080, "Ghost node running",
+  the net node listening on 0.0.0.0:18080, "Opacus node running",
   killed with SIGINT after 25 s (the heartbeat stub runs forever);
   `create-wallet` + `address` OK (throwaway wallet, seed redacted in
   the committed log); `mine --solo --duration-secs 300` -> a
@@ -452,9 +455,10 @@ items answer the open questions of section 8 in order.
   RPC port is only echoed in the log line (no server), and the
   wallet-gov bridge, gossip envelope channel and collector service
   are exactly the remaining WP-D2b/D2c/D2d work items. Raw smoke log
-  committed as `docs/gips/GIP-2-r2-stage-log.txt`. Artifact hash
-  (sha256): GIP-2-r2-stage-log.txt
-  e831d73268bc90d3f8abea413461eb74f2886e8008d2ad2b4ddf1f32778140be.
+  committed as `docs/gips/GIP-2-r2-stage-log.txt` (re-captured on the
+  renamed surface by the rebrand pass). Artifact hash (sha256):
+  GIP-2-r2-stage-log.txt
+  54c292ffc1694fef7258ff79cdf145b8e9190cf1cf200c7944aad752c6e96094.
 
   WP-D2b stage note (runbook stage R3 work item, the wallet-gov
   bridge): `build_ballot` now consumes wallet-real inputs. The
@@ -553,6 +557,32 @@ items answer the open questions of section 8 in order.
   re-opens with the collector key, re-verifies and re-anchors against
   the frontier. Remaining R3 items: WP-D2d (collector service) and the
   scripted scenario.
+
+  Rebrand stage note (pre-R3 tree-wide pass): the project name is
+  Opacus everywhere and the legacy internal codename is scrubbed from
+  the whole tree - code identifiers, wire states and fields,
+  consensus/wire domain tags (`OPACUS/v4/...`, `OPACUS/v5/...`, the
+  `opacus_final_v1` PoW tag, `opacus-ballot-archive-v1`,
+  `opacus-swap-p2p-v1`), the key-derivation tags
+  (`opacus_spend_derive_v2` / `opacus_view_derive_v2`, the pinned
+  official-vector rows recomputed over the published BIP-39 phrases),
+  the miner core module (`opacushash`), the
+  node data dir (`~/.opacus`), the env surface (`OPACUS_NET*`,
+  `OPACUS_SWAP*`), the wrapped-token contract files
+  (`contracts/wopacus.address`) and every document. The one-off
+  migration scripts of the early deployment rounds left the repo root;
+  `deploy_wopacus.ps1` / `publish_opacus.ps1` remain. Pre-mainnet is
+  the only window where a consensus-visible tag rename is free, so it
+  was spent deliberately: the decision SEMANTICS are untouched (same
+  totals, same trace shape, same P-5/P-6 behavior), while every
+  tag-derived fingerprint moved - the R0 golden set and the R1 drop-dir
+  artifacts were regenerated deterministically (seed 42, 7 voters, the
+  identical 16-drop matrix; the R1 close re-reproduced the R0 golden
+  `result_hash` byte-for-byte under the new tags), the R2 smoke was
+  re-validated on the renamed surface (stage log re-captured), and the
+  runbook acceptance checklist grows a standing brand scan
+  (case-insensitive grep of HEAD for the legacy codename) next to the
+  secret scan. 58 tracked files rewritten, zero residual occurrences.
 
 ## 10. Plain-language summary (non-normative)
 

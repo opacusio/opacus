@@ -15,7 +15,7 @@
 //! ```
 //!
 //! This is the primitive that lets a swap counterparty prove "the XMR
-//! address and the GHOST note key belong to the same owner" without
+//! address and the OPACUS note key belong to the same owner" without
 //! revealing `x`.
 
 use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT as G1, RISTRETTO_BASEPOINT_POINT as G2};
@@ -57,7 +57,7 @@ fn challenge(
     a2: &CompressedRistretto,
 ) -> Scalar {
     let mut buf = Vec::with_capacity(128);
-    buf.extend_from_slice(b"ghost-xmr-dleq-v1");
+    buf.extend_from_slice(b"opacus-xmr-dleq-v1");
     buf.extend_from_slice(r1.as_bytes());
     buf.extend_from_slice(r2.as_bytes());
     buf.extend_from_slice(a1.as_bytes());

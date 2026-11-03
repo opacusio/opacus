@@ -28,7 +28,7 @@ impl Default for DaemonConfig {
             rpc_port: 18081,
             data_dir: dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
-                .join(".ghost"),
+                .join(".opacus"),
             network: "mainnet".to_string(),
             use_tor: false,
         }
@@ -67,7 +67,7 @@ impl OpacusDaemon {
         let (consensus, params) = select_consensus(&config.network)?;
         std::fs::create_dir_all(&config.data_dir)
             .map_err(|e| DaemonError::InitFailed(e.to_string()))?;
-        tracing::info!("Ghost daemon initialized at {:?}", config.data_dir);
+        tracing::info!("Opacus daemon initialized at {:?}", config.data_dir);
         tracing::info!(
             "consensus: net={} | v4_activation_height={} | fee_floor={}",
             config.network,
@@ -109,7 +109,7 @@ impl OpacusDaemon {
 
     pub async fn run(&mut self) -> Result<(), DaemonError> {
         tracing::info!(
-            "Ghost node running | P2P: {} | RPC: {} | net: {}",
+            "Opacus node running | P2P: {} | RPC: {} | net: {}",
             self.config.p2p_port,
             self.config.rpc_port,
             self.config.network
@@ -133,7 +133,7 @@ mod tests {
 
     fn tmp_daemon() -> OpacusDaemon {
         let dir = std::env::temp_dir().join(format!(
-            "ghost-daemon-test-{}-{}",
+            "opacus-daemon-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -183,7 +183,7 @@ mod tests {
 
     fn tmp_dir() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "ghost-daemon-test-{}-{}",
+            "opacus-daemon-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

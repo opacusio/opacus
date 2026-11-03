@@ -1,7 +1,7 @@
-//! XMR <-> GHOST atomic swap protocol (v0.1 coordination layer).
+//! XMR <-> OPACUS atomic swap protocol (v0.1 coordination layer).
 //!
-//! Direction: the Maker sells native GHOST and buys XMR; the Taker sells
-//! XMR and buys GHOST.
+//! Direction: the Maker sells native OPACUS and buys XMR; the Taker sells
+//! XMR and buys OPACUS.
 //!
 //! Flow (heights are provided by the caller - block heights of the two
 //! chains are tracked out of band for now):
@@ -12,9 +12,9 @@
 //!  Accepted     : taker accepts; accepted_height recorded
 //!  XmrLocked    : taker's monero-wallet-rpc transfer with
 //!                 payment_id = hashlock, unlock_time = fund timeout
-//!  GhostLocked  : maker burns a zk note into the bridge pool, publishing
+//!  OpacusLocked  : maker burns a zk note into the bridge pool, publishing
 //!                 the hashlock; the DLEq proof binds their XMR identity
-//!  Claimed      : taker reveals preimage to claim GHOST; maker uses the
+//!  Claimed      : taker reveals preimage to claim OPACUS; maker uses the
 //!                 revealed preimage to claim the XMR
 //!  Refunded     : either side refunds after its timeout expired
 //! ```
@@ -40,9 +40,9 @@ use crate::clsag_verify::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
-    /// Sells GHOST, buys XMR.
+    /// Sells OPACUS, buys XMR.
     Maker,
-    /// Sells XMR, buys GHOST.
+    /// Sells XMR, buys OPACUS.
     Taker,
 }
 
@@ -51,7 +51,7 @@ pub enum Phase {
     Offered,
     Accepted,
     XmrLocked,
-    GhostLocked,
+    OpacusLocked,
     Claimed,
     Refunded,
 }
@@ -77,16 +77,16 @@ pub enum SwapError {
 // WG-CLSAG-adaptor-int: the Monero-side claim adaptor
 // ---------------------------------------------------------------------------
 
-const SWAP_SECRET_TAG: &[u8] = b"ghost-bridge/swap-secret-v1";
-const SWAP_CLAIM_MSG_TAG: &[u8] = b"ghost-swap/xmr-claim-msg-v1";
+const SWAP_SECRET_TAG: &[u8] = b"opacus-bridge/swap-secret-v1";
+const SWAP_CLAIM_MSG_TAG: &[u8] = b"opacus-swap/xmr-claim-msg-v1";
 
 /// The swap secret `t` bound into the Monero-side claim adaptor:
-/// `hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage)`. Reduced mod
+/// `hash_to_scalar("opacus-bridge/swap-secret-v1" || preimage)`. Reduced mod
 /// l by the monerod `hash_to_scalar`, so the encoding is always a canonical
 /// scalar (a raw blake3 digest would be non-canonical for ~2.7% of
 /// preimages and `complete` would reject honest completions).
-/// Domain-separated from the hashlock (`ghost-swap-hashlock-v1`) and the
-/// WG-21 offer OTK (`ghost-bridge/offer-otk-v1`).
+/// Domain-separated from the hashlock (`opacus-swap-hashlock-v1`) and the
+/// WG-21 offer OTK (`opacus-bridge/offer-otk-v1`).
 pub fn swap_secret(preimage: &[u8; 32]) -> [u8; 32] {
     let mut buf = SWAP_SECRET_TAG.to_vec();
     buf.extend_from_slice(preimage);
@@ -201,29 +201,29 @@ pub struct Offer {
     // (swap_p2p::OfferAdaptor), not here - offer ids stay v1-stable.
     /// XMR amount in piconero (1e12).
     pub xmr_piconero: u64,
-    /// GHOST amount in atoms.
-    pub ghost_atoms: u64,
+    /// OPACUS amount in atoms.
+    pub opacus_atoms: u64,
     /// 32-byte hashlock: blake3(preimage).
     pub hashlock: [u8; 32],
     /// Blocks the taker has to lock XMR after acceptance.
     pub fund_timeout_blocks: u64,
     /// Blocks both sides have to finish after both locks are in.
     pub claim_timeout_blocks: u64,
-    pub maker_ghost_address: String,
+    pub maker_opacus_address: String,
     pub taker_xmr_address: String,
 }
 
 impl Offer {
     pub fn new(
         xmr_piconero: u64,
-        ghost_atoms: u64,
+        opacus_atoms: u64,
         fund_timeout_blocks: u64,
         claim_timeout_blocks: u64,
-        maker_ghost_address: impl Into<String>,
+        maker_opacus_address: impl Into<String>,
         taker_xmr_address: impl Into<String>,
         preimage: &[u8; 32],
     ) -> Result<Self, SwapError> {
-        if xmr_piconero == 0 || ghost_atoms == 0 {
+        if xmr_piconero == 0 || opacus_atoms == 0 {
             return Err(SwapError::ZeroAmount);
         }
         if fund_timeout_blocks == 0 || claim_timeout_blocks == 0 {
@@ -231,11 +231,11 @@ impl Offer {
         }
         Ok(Self {
             xmr_piconero,
-            ghost_atoms,
+            opacus_atoms,
             hashlock: hashlock_of(preimage),
             fund_timeout_blocks,
             claim_timeout_blocks,
-            maker_ghost_address: maker_ghost_address.into(),
+            maker_opacus_address: maker_opacus_address.into(),
             taker_xmr_address: taker_xmr_address.into(),
         })
     }
@@ -244,7 +244,7 @@ impl Offer {
 /// blake3 hashlock of a 32-byte preimage.
 pub fn hashlock_of(preimage: &[u8; 32]) -> [u8; 32] {
     let mut h = Hasher::new();
-    h.update(b"ghost-swap-hashlock-v1");
+    h.update(b"opacus-swap-hashlock-v1");
     h.update(preimage);
     h.finalize().into()
 }
@@ -351,23 +351,23 @@ impl SwapSession {
         Ok(())
     }
 
-    /// Record the GHOST lock (maker acting on his own session after locking
+    /// Record the OPACUS lock (maker acting on his own session after locking
     /// the bridge pool; taker calls this too after observing the lock tx).
-    /// Moves XmrLocked -> GhostLocked on ANY role.
-    pub fn mark_ghost_locked(&mut self, current_height: u64) -> Result<(), SwapError> {
+    /// Moves XmrLocked -> OpacusLocked on ANY role.
+    pub fn mark_opacus_locked(&mut self, current_height: u64) -> Result<(), SwapError> {
         if self.phase != Phase::XmrLocked {
             return Err(SwapError::WrongPhase);
         }
-        self.phase = Phase::GhostLocked;
+        self.phase = Phase::OpacusLocked;
         self.both_locked_height = Some(current_height);
         Ok(())
     }
 
-    /// Taker reveals the preimage and claims GHOST.
+    /// Taker reveals the preimage and claims OPACUS.
     /// WG-18: consensus [R5] - the claim is valid while `current_height < T`
     /// (strict); at h == T the claim is late.
     pub fn claim(&mut self, preimage: &[u8; 32], current_height: u64) -> Result<(), SwapError> {
-        self.require(Phase::GhostLocked, Role::Taker)?;
+        self.require(Phase::OpacusLocked, Role::Taker)?;
         let deadline = self
             .both_locked_height
             .unwrap_or(0)
@@ -393,8 +393,8 @@ impl SwapSession {
                     return Err(SwapError::NotTimedOut);
                 }
             }
-            // maker locked GHOST but taker never claimed
-            (Phase::GhostLocked, Role::Maker) => {
+            // maker locked OPACUS but taker never claimed
+            (Phase::OpacusLocked, Role::Maker) => {
                 let deadline = self
                     .both_locked_height
                     .unwrap_or(0)
@@ -418,13 +418,13 @@ impl SwapSession {
 
     /// Taker: attach the pre-signed Monero claim adaptor. Only meaningful
     /// after the preimage was revealed (the taker needs it to derive the
-    /// swap secret the adaptor is bound to), i.e. in `GhostLocked`, before
+    /// swap secret the adaptor is bound to), i.e. in `OpacusLocked`, before
     /// the claim is published.
     pub fn attach_xmr_claim(&mut self, claim: XmrClaimAdaptor) -> Result<(), SwapError> {
         if self.role != Role::Taker {
             return Err(SwapError::WrongRole);
         }
-        if self.phase != Phase::GhostLocked {
+        if self.phase != Phase::OpacusLocked {
             return Err(SwapError::WrongPhase);
         }
         self.xmr_claim = Some(claim);
@@ -439,7 +439,7 @@ impl SwapSession {
         if self.role != Role::Maker {
             return Err(SwapError::WrongRole);
         }
-        if self.phase != Phase::GhostLocked {
+        if self.phase != Phase::OpacusLocked {
             return Err(SwapError::WrongPhase);
         }
         let preimage = self.preimage.ok_or(SwapError::MissingPreimage)?;
@@ -466,10 +466,10 @@ mod tests {
     fn offer() -> Offer {
         Offer::new(
             2_000_000_000_000, // 2 XMR
-            1_000_000_000,     // GHOST atoms
+            1_000_000_000,     // OPACUS atoms
             100,               // fund timeout
             200,               // claim timeout
-            "ghost-maker-addr",
+            "opacus-maker-addr",
             "xmr-taker-addr",
             &[42u8; 32],
         )
@@ -485,12 +485,12 @@ mod tests {
         taker.lock_xmr(1010).unwrap();
         assert_eq!(taker.phase, Phase::XmrLocked);
 
-        // Maker observes the XMR lock, then both sides record the GHOST lock
+        // Maker observes the XMR lock, then both sides record the OPACUS lock
         // (maker performs it, taker sees it).
         maker.mark_xmr_locked(1010).unwrap();
-        maker.mark_ghost_locked(1015).unwrap();
-        taker.mark_ghost_locked(1015).unwrap();
-        assert_eq!(maker.phase, Phase::GhostLocked);
+        maker.mark_opacus_locked(1015).unwrap();
+        taker.mark_opacus_locked(1015).unwrap();
+        assert_eq!(maker.phase, Phase::OpacusLocked);
 
         taker.claim(&[42u8; 32], 1020).unwrap();
         assert_eq!(taker.phase, Phase::Claimed);
@@ -503,8 +503,8 @@ mod tests {
     #[test]
     fn wrong_phase_order_rejected() {
         let mut taker = SwapSession::accept(offer(), 100);
-        // cannot record GHOST lock before XMR lock
-        assert_eq!(taker.mark_ghost_locked(100), Err(SwapError::WrongPhase));
+        // cannot record OPACUS lock before XMR lock
+        assert_eq!(taker.mark_opacus_locked(100), Err(SwapError::WrongPhase));
         // maker session cannot claim before locks
         let mut maker = SwapSession::make_offer(offer(), 100);
         assert_eq!(maker.claim(&[42u8; 32], 100), Err(SwapError::WrongPhase));
@@ -514,7 +514,7 @@ mod tests {
     fn bad_preimage_rejected() {
         let mut taker = SwapSession::accept(offer(), 100);
         taker.lock_xmr(100).unwrap();
-        taker.mark_ghost_locked(100).unwrap();
+        taker.mark_opacus_locked(100).unwrap();
         assert_eq!(taker.claim(&[7u8; 32], 100), Err(SwapError::BadPreimage));
     }
 
@@ -529,11 +529,11 @@ mod tests {
     #[test]
     fn maker_refund_after_claim_timeout() {
         let mut maker = SwapSession::make_offer(offer(), 100);
-        // simulate taker side progress: xmr locked at 110, ghost locked at 120
+        // simulate taker side progress: xmr locked at 110, opacus locked at 120
         let mut taker = SwapSession::accept(offer(), 105);
         taker.lock_xmr(110).unwrap();
         maker.mark_xmr_locked(110).unwrap();
-        maker.mark_ghost_locked(120).unwrap();
+        maker.mark_opacus_locked(120).unwrap();
         // deadline 120 + 200 = 320
         assert_eq!(maker.refund(319), Err(SwapError::NotTimedOut));
         maker.refund(320).unwrap();
@@ -548,8 +548,8 @@ mod tests {
         let mut taker = SwapSession::accept(offer(), 105);
         taker.lock_xmr(110).unwrap();
         maker.mark_xmr_locked(110).unwrap();
-        maker.mark_ghost_locked(120).unwrap();
-        taker.mark_ghost_locked(120).unwrap();
+        maker.mark_opacus_locked(120).unwrap();
+        taker.mark_opacus_locked(120).unwrap();
         // deadline = 120 + 200 = 320: claiming exactly at the deadline is late
         assert_eq!(taker.claim(&[42u8; 32], 320), Err(SwapError::NotTimedOut));
         assert_eq!(taker.phase, Phase::Refunded);
@@ -563,7 +563,7 @@ mod tests {
         let mut taker = SwapSession::accept(offer(), 105);
         taker.lock_xmr(110).unwrap();
         maker.mark_xmr_locked(110).unwrap();
-        maker.mark_ghost_locked(120).unwrap();
+        maker.mark_opacus_locked(120).unwrap();
         // deadline = 120 + 200 = 320: refund at exactly h == T succeeds
         maker.refund(320).unwrap();
         assert_eq!(maker.phase, Phase::Refunded);
@@ -661,7 +661,7 @@ mod tests {
             1_000_000_000,
             100,
             200,
-            "ghost-maker-addr",
+            "opacus-maker-addr",
             "xmr-taker-addr",
             preimage,
         )
@@ -688,14 +688,14 @@ mod tests {
         .unwrap();
         assert!(claim.verify_for(&offer_id, &offer_for(&preimage).hashlock));
 
-        // taker side: attach only in GhostLocked
+        // taker side: attach only in OpacusLocked
         let mut taker = SwapSession::accept(offer_for(&preimage), 100);
         assert_eq!(
             taker.attach_xmr_claim(claim.clone()),
             Err(SwapError::WrongPhase)
         );
         taker.lock_xmr(110).unwrap();
-        taker.mark_ghost_locked(120).unwrap();
+        taker.mark_opacus_locked(120).unwrap();
         taker.attach_xmr_claim(claim.clone()).unwrap();
 
         // maker side: full progression, then completion with his own preimage
@@ -706,7 +706,7 @@ mod tests {
             maker.complete_xmr_claim(&offer_id),
             Err(SwapError::WrongPhase)
         );
-        maker.mark_ghost_locked(120).unwrap();
+        maker.mark_opacus_locked(120).unwrap();
         // no adaptor recorded yet -> invalid
         assert_eq!(
             maker.complete_xmr_claim(&offer_id),
@@ -752,7 +752,7 @@ mod tests {
         let mut maker = SwapSession::make_offer(offer_for(&preimage), 100);
         // NO set_preimage
         maker.mark_xmr_locked(110).unwrap();
-        maker.mark_ghost_locked(120).unwrap();
+        maker.mark_opacus_locked(120).unwrap();
         maker.xmr_claim = Some(claim);
         assert_eq!(
             maker.complete_xmr_claim(&offer_id),
@@ -782,7 +782,7 @@ mod tests {
         let mut maker = SwapSession::make_offer(offer_for(&[45u8; 32]), 100);
         maker.set_preimage([45u8; 32]).unwrap();
         maker.mark_xmr_locked(110).unwrap();
-        maker.mark_ghost_locked(120).unwrap();
+        maker.mark_opacus_locked(120).unwrap();
         maker.xmr_claim = Some(claim);
         assert_eq!(
             maker.complete_xmr_claim(&offer_id),

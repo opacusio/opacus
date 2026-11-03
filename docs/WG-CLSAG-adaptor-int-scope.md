@@ -12,7 +12,7 @@ Close the deferred item of `docs/WG-CLSAG-adaptor-scope.md` section 6
 ("Swap protocol integration - xmr_swap.rs state machine, swap_p2p sidecar
 fields, bridge service wiring - a later WP on top of this primitive"): the
 monerod-compatible CLSAG adaptor primitive (`clsag_adaptor.rs`, WP-B) becomes
-a first-class, fail-closed part of the XMR <-> GHOST swap coordination
+a first-class, fail-closed part of the XMR <-> OPACUS swap coordination
 protocol. The taker pre-signs the Monero-side claim spend of the locked XMR
 as a CLSAG adaptor bound to the swap secret `t`; the maker completes it with
 `t` derived from his own preimage and obtains a signature that passes the
@@ -26,13 +26,13 @@ The swap secret and the claim message are deterministic functions of data
 both sides already hold - no new secrets are introduced and no extra
 secret-handover frame is needed:
 
-- `t = hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage)` - reduced
+- `t = hash_to_scalar("opacus-bridge/swap-secret-v1" || preimage)` - reduced
   mod l by the monerod `hash_to_scalar`, so `t` is always a canonical scalar
   (a raw blake3 output would be non-canonical for ~2.7% of preimages and
   `complete` would reject honest completions). Domain-separated from the
-  hashlock (`ghost-swap-hashlock-v1`), the WG-21 offer OTK
-  (`ghost-bridge/offer-otk-v1`) and the adaptor nonce tag.
-- `message = blake3("ghost-swap/xmr-claim-msg-v1" || offer_id || hashlock)` -
+  hashlock (`opacus-swap-hashlock-v1`), the WG-21 offer OTK
+  (`opacus-bridge/offer-otk-v1`) and the adaptor nonce tag.
+- `message = blake3("opacus-swap/xmr-claim-msg-v1" || offer_id || hashlock)` -
   the bilateral claim-tx binding: the pre-signature is only valid for the
   claim of THIS swap (the offer id already binds the full offer payload).
 
@@ -55,9 +55,9 @@ tail (130 B) and the 21-slot instance layout stay frozen (WG-26 v1).
 Choreography (adaptor-enabled taker; heights are caller-provided as in v0.1):
 
 ```text
-Offer -> Accept -> XmrLocked -> GhostLocked (preimage revealed)
+Offer -> Accept -> XmrLocked -> OpacusLocked (preimage revealed)
   taker: build_xmr_claim(x, z, preimage, offer binding, ring, c_offset, di)
-         attach_xmr_claim (Taker, GhostLocked)
+         attach_xmr_claim (Taker, OpacusLocked)
   taker: publish_claim -> Claim frame CARRIES xmr_claim sidecar
   maker: Claim handler - structural parse, verify_adaptor + message binding,
          complete with t = swap_secret(session preimage), verify_clsag gate,
@@ -80,8 +80,8 @@ frames; a session without a stored preimage cannot complete.
      `verify_for` (message binding + `verify_adaptor`) and `complete_for`
      (`complete` + `verify_clsag` acceptance gate);
    - session fields `xmr_claim` / `xmr_completed` and the state machine
-     methods `attach_xmr_claim` (Taker, GhostLocked) and
-     `complete_xmr_claim` (Maker, GhostLocked);
+     methods `attach_xmr_claim` (Taker, OpacusLocked) and
+     `complete_xmr_claim` (Maker, OpacusLocked);
    - new `SwapError` variants: `MissingPreimage`, `XmrClaimInvalid`.
 2. `swap_p2p.rs` (wire): hex sidecar `XmrClaimSidecar` with structural
    validation (`to_claim` / `from_claim`), `Frame.xmr_claim` field, threading
@@ -99,12 +99,12 @@ frames; a session without a stored preimage cannot complete.
 - Real Monero transaction construction (tx prefix, outputs, Bulletproofs):
   the claim `message` is the bilateral binding above; ring and `c_offset`
   are caller-provided exactly as in WP-B's synthetic model.
-- Ghost-side (FCMP/Halo2) adaptor signatures; the v0.3 primitives
+- Opacus-side (FCMP/Halo2) adaptor signatures; the v0.3 primitives
   (`adaptor.rs`, `clsag.rs`) stay untouched; wire formats stay frozen.
 
 ## 6. Test matrix
 
-- P1 honest loop over the wire: offer -> accept -> xmr lock -> ghost lock ->
+- P1 honest loop over the wire: offer -> accept -> xmr lock -> opacus lock ->
   attach -> publish_claim -> the maker session stores a completed signature
   that passes the UNMODIFIED monerod-compatible `verify_clsag` (acceptance
   gate) and `recover_secret` returns `t = swap_secret(preimage)`.

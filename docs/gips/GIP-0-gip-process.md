@@ -11,7 +11,7 @@
 
 ## 1. Abstract
 
-This document defines the Ghost Improvement Proposal (GIP) process for the
+This document defines the Opacus Improvement Proposal (GIP) process for the
 Opacus network: what a GIP is, which types exist, how a proposal moves
 through its lifecycle, how GIPs are numbered and stored, the normative
 section template, and how WG/WP work packages reference the GIPs they
@@ -41,7 +41,7 @@ green CI as evidence. GIP-0 formalizes this discipline so that:
   - *Consensus*: chain rules, circuit semantics, validity of transactions
     and blocks;
   - *Network*: wire format, P2P protocol, note transmission;
-  - *Bridge / Wallet / Apps*: swap coordination, wGHOST tooling, wallet
+  - *Bridge / Wallet / Apps*: swap coordination, wOPACUS tooling, wallet
     behavior.
 - **Process** - process and governance documents (this document, future OG/OC
   GIPs). A Process GIP has no code obligation and is Activated by maintainer

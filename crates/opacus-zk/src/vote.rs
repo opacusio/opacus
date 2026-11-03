@@ -92,17 +92,17 @@ fn fp_from_label(label: &[u8]) -> Fp {
 
 /// Domain constant of the per-note vote key.
 pub fn dom_vsk() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/vsk")
+    fp_from_label(b"OPACUS/v4/dom/vsk")
 }
 
 /// Domain constant of the per-(note, proposal) vote seed.
 pub fn dom_vrho() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/vrho")
+    fp_from_label(b"OPACUS/v4/dom/vrho")
 }
 
 /// Domain constant of the vote serial (the nullifier analog, GIP-2 3.2).
 pub fn dom_vs() -> Fp {
-    fp_from_label(b"GHOST/v4/dom/vs")
+    fp_from_label(b"OPACUS/v4/dom/vs")
 }
 
 // ---------------------------------------------------------------------------
@@ -128,13 +128,13 @@ pub fn vote_serial(a: Fp, b: Fp, rho: Fp, proposal: Fp) -> Fp {
 }
 
 /// Public proposal identity [GIP-2 R-4, R-5]:
-/// `blake3("GHOST/v4/gov/proposal", le32(gip), transition, le64(h_open),
+/// `blake3("OPACUS/v4/gov/proposal", le32(gip), transition, le64(h_open),
 /// anchor_repr)` reduced into `Fp` over the first 16 bytes. Everything a
 /// voter needs to replay the decision (which GIP, which status transition,
 /// which snapshot anchor) is covered.
 pub fn proposal_id(gip: u32, transition: u8, h_open: u64, anchor: Fp) -> Fp {
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v4/gov/proposal");
+    h.update(b"OPACUS/v4/gov/proposal");
     h.update(&gip.to_le_bytes());
     h.update(&[transition]);
     h.update(&h_open.to_le_bytes());
@@ -164,12 +164,12 @@ pub struct BallotHeader {
 
 /// Ballot sighash [GIP-2 3.2 step 2: the binding signature covers GIP-N,
 /// choice, V, VS, anchor]:
-/// `S = blake3("GHOST/v4/gov/sighash", le64(version = 1), le32(gip),
+/// `S = blake3("OPACUS/v4/gov/sighash", le64(version = 1), le32(gip),
 /// transition, choice, le64(h_open), anchor, proposal, le64(v),
 /// VS_1..VS_K)`.
 pub fn ballot_sighash(hdr: &BallotHeader, vs: &[Fp]) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v4/gov/sighash");
+    h.update(b"OPACUS/v4/gov/sighash");
     h.update(&1u64.to_le_bytes());
     h.update(&hdr.gip.to_le_bytes());
     h.update(&[hdr.transition, hdr.choice]);
@@ -197,7 +197,7 @@ fn fq_from_32(b: &[u8; 32]) -> Fq {
     acc * two64 + Fq::from(limb(0))
 }
 
-/// Ballot signing key: `bsk = blake3("GHOST/v4/gov/bsk", le32(count),
+/// Ballot signing key: `bsk = blake3("OPACUS/v4/gov/bsk", le32(count),
 /// (a_i, b_i) shares in ballot order, proposal)` reduced into `Fq`.
 ///
 /// Deterministic per (note-set, proposal): the derived verification key
@@ -205,7 +205,7 @@ fn fq_from_32(b: &[u8; 32]) -> Fq {
 /// only the owner of both key shares of every note can produce it.
 pub fn ballot_key(shares: &[(Fp, Fp)], proposal: Fp) -> Fq {
     let mut h = blake3::Hasher::new();
-    h.update(b"GHOST/v4/gov/bsk");
+    h.update(b"OPACUS/v4/gov/bsk");
     h.update(&(shares.len() as u32).to_le_bytes());
     for (a, b) in shares {
         h.update(a.to_repr().as_ref());

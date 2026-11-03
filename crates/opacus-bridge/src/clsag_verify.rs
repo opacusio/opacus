@@ -1,7 +1,7 @@
 //! Monerod-facing CLSAG verification (WG-CLSAG WP-B).
 //!
 //! Real, byte-compatible verification of Monero CLSAG ring signatures from
-//! monerod data, so the Ghost side can cryptographically confirm the Monero
+//! monerod data, so the Opacus side can cryptographically confirm the Monero
 //! legs of atomic swaps (lock / claim / refund). Normative reference is the
 //! Monero implementation, not the paper text (docs/WG-CLSAG-verify-scope.md
 //! section 5):

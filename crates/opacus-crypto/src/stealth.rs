@@ -37,7 +37,7 @@ impl PublicAddress {
         let mut payload = Vec::with_capacity(64);
         payload.extend_from_slice(&self.view_pubkey.compress().to_bytes());
         payload.extend_from_slice(&self.spend_pubkey.compress().to_bytes());
-        format!("ghost1{}", hex::encode(payload))
+        format!("opacus1{}", hex::encode(payload))
     }
 
     pub fn from_string(_s: &str) -> Result<Self, StealthError> {
@@ -59,7 +59,7 @@ impl StealthAddress {
         let ephemeral = r * ED25519_BASEPOINT_POINT;
         let shared = r * recipient.view_pubkey;
         let mut h = Hasher::new();
-        h.update(b"ghost_stealth_derive");
+        h.update(b"opacus_stealth_derive");
         h.update(shared.compress().as_bytes());
         let secret_bytes: [u8; 32] = h.finalize().into();
         let secret = Scalar::from_bytes_mod_order(secret_bytes);

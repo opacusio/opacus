@@ -10,22 +10,22 @@
 //! let svc = opacus_node::swap_service::global();    // wallet/CLI: drive lock/claim
 //! ```
 //!
-//! Choreography through the service (maker sells GHOST, taker sells XMR):
+//! Choreography through the service (maker sells OPACUS, taker sells XMR):
 //!
 //! ```text
 //! svc.publish_offer(&offer, &preimage)   -> Offer broadcast, hex offer id back
 //! svc.xmr_lock(&id, "xmr-tx..", h)       -> taker announces his XMR lock
-//! svc.ghost_lock(&id, "ref..", h)        -> maker locks GHOST, preimage revealed
+//! svc.opacus_lock(&id, "ref..", h)        -> maker locks OPACUS, preimage revealed
 //! (Claim auto-replies on the socket; the maker then claims XMR on-chain)
 //! ```
 //!
 //! Env knobs for [`autostart_from_env`]:
 //!
 //! ```text
-//! GHOST_SWAP=0              disable the swap node
-//! GHOST_SWAP_PORT=18081     listen port (default 18081, loopback)
-//! GHOST_SWAP_PEERS=a:b,c:d  bootstrap dials
-//! GHOST_SWAP_HEIGHT=n       initial chain tip
+//! OPACUS_SWAP=0              disable the swap node
+//! OPACUS_SWAP_PORT=18081     listen port (default 18081, loopback)
+//! OPACUS_SWAP_PEERS=a:b,c:d  bootstrap dials
+//! OPACUS_SWAP_HEIGHT=n       initial chain tip
 //! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -103,17 +103,17 @@ impl SwapService {
         self.node.send_wire(&wire)
     }
 
-    /// Maker: the GHOST lock is on-chain; announce it and reveal the
+    /// Maker: the OPACUS lock is on-chain; announce it and reveal the
     /// preimage (the taker needs it to claim). Returns peers reached.
-    pub fn ghost_lock(
+    pub fn opacus_lock(
         &self,
         offer_id: &str,
-        ghost_tx_ref: &str,
+        opacus_tx_ref: &str,
         lock_height: u64,
     ) -> Result<usize, NetError> {
-        let wire = self.node.net().lock().unwrap().publish_ghost_lock(
+        let wire = self.node.net().lock().unwrap().publish_opacus_lock(
             offer_id,
-            ghost_tx_ref,
+            opacus_tx_ref,
             lock_height,
         )?;
         self.node.send_wire(&wire)
@@ -182,7 +182,7 @@ pub fn global() -> Option<Arc<SwapService>> {
 }
 
 /// Feed the live chain tip to the process-wide node (no-op if it was
-/// never started - e.g. GHOST_SWAP=0). Every feed also runs the WG-18
+/// never started - e.g. OPACUS_SWAP=0). Every feed also runs the WG-18
 /// deadline sweep, so an accepted block that closes a swap's fund or
 /// claim window auto-refunds the session and notifies the peers.
 pub fn feed_height(h: u64) {
@@ -200,14 +200,14 @@ pub fn autostart_from_env() -> bool {
     if global().is_some() {
         return true;
     }
-    if std::env::var("GHOST_SWAP").as_deref() == Ok("0") {
+    if std::env::var("OPACUS_SWAP").as_deref() == Ok("0") {
         return false;
     }
-    let port = std::env::var("GHOST_SWAP_PORT")
+    let port = std::env::var("OPACUS_SWAP_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(18081);
-    let peers: Vec<String> = std::env::var("GHOST_SWAP_PEERS")
+    let peers: Vec<String> = std::env::var("OPACUS_SWAP_PEERS")
         .ok()
         .map(|s| {
             s.split(',')
@@ -216,7 +216,7 @@ pub fn autostart_from_env() -> bool {
                 .collect()
         })
         .unwrap_or_default();
-    let height = std::env::var("GHOST_SWAP_HEIGHT")
+    let height = std::env::var("OPACUS_SWAP_HEIGHT")
         .ok()
         .and_then(|h| h.parse::<u64>().ok())
         .unwrap_or(0);
@@ -308,20 +308,20 @@ mod tests {
     }
 
     /// WG-22: an Offer with a valid-but-mismatched one-time sidecar is
-    /// tracked, but the taker refuses the GhostLocked announcement (the
+    /// tracked, but the taker refuses the OpacusLocked announcement (the
     /// revealed preimage does not re-derive the announced keys) - the
     /// rejection surfaces as a protocol error at the node boundary.
     #[test]
-    fn sidecar_mismatch_blocks_ghost_lock_at_service() {
+    fn sidecar_mismatch_blocks_opacus_lock_at_service() {
         let taker = SwapService::spawn(&net_cfg()).unwrap();
         taker.set_height(1000);
         let payload = SwapOfferPayload {
             xmr_piconero: 1_000_000_000_000,
-            ghost_atoms: 500_000_000,
+            opacus_atoms: 500_000_000,
             hashlock: hex_str(&hashlock_of(&PREIMAGE)),
             fund_timeout_blocks: 100,
             claim_timeout_blocks: 200,
-            maker_ghost_address: "ghost-maker-svc".to_string(),
+            maker_opacus_address: "opacus-maker-svc".to_string(),
             taker_xmr_address: "xmr-taker-svc".to_string(),
         };
         let id = offer_id_of(&payload);
@@ -334,15 +334,15 @@ mod tests {
         taker.node().process_wire(&wire).unwrap(); // Accepted, sidecar stored
 
         taker.xmr_lock(&hex_str(&id), "xmr-tx-wg22s", 1050).unwrap();
-        let ghost = Frame::new(SwapNetMessage::GhostLocked {
+        let opacus = Frame::new(SwapNetMessage::OpacusLocked {
             offer_id: hex_str(&id),
-            ghost_tx_ref: "ghost-burn-wg22s".to_string(),
+            opacus_tx_ref: "opacus-burn-wg22s".to_string(),
             height: 1060,
             preimage: hex_str(&PREIMAGE),
         });
         let err = taker
             .node()
-            .process_wire(&encode_frame(&ghost).unwrap())
+            .process_wire(&encode_frame(&opacus).unwrap())
             .unwrap_err();
         assert!(matches!(
             err,
@@ -354,10 +354,10 @@ mod tests {
     fn offer() -> Offer {
         Offer::new(
             1_000_000_000_000, // 1 XMR
-            500_000_000,       // GHOST atoms
+            500_000_000,       // OPACUS atoms
             100,               // fund timeout blocks
             200,               // claim timeout blocks
-            "ghost-maker-svc",
+            "opacus-maker-svc",
             "xmr-taker-svc",
             &PREIMAGE,
         )
@@ -372,11 +372,11 @@ mod tests {
     fn external_offer_wire() -> (String, Vec<u8>) {
         let payload = SwapOfferPayload {
             xmr_piconero: 1_000_000_000_000,
-            ghost_atoms: 500_000_000,
+            opacus_atoms: 500_000_000,
             hashlock: hex_str(&hashlock_of(&PREIMAGE)),
             fund_timeout_blocks: 100,
             claim_timeout_blocks: 200,
-            maker_ghost_address: "ghost-maker-svc".to_string(),
+            maker_opacus_address: "opacus-maker-svc".to_string(),
             taker_xmr_address: "xmr-taker-svc".to_string(),
         };
         let id = offer_id_of(&payload);
@@ -428,7 +428,7 @@ mod tests {
     }
 
     /// THE e2e: full choreography Offer -> Accept -> XmrLocked ->
-    /// GhostLocked (preimage) -> Claim across two live services.
+    /// OpacusLocked (preimage) -> Claim across two live services.
     #[test]
     fn two_services_full_swap() {
         let maker = SwapService::spawn(&net_cfg()).unwrap();
@@ -459,11 +459,11 @@ mod tests {
                 .unwrap_or(false)
         });
 
-        assert_eq!(maker.ghost_lock(&id, "ghost-burn-svc", 1060).unwrap(), 1);
+        assert_eq!(maker.opacus_lock(&id, "opacus-burn-svc", 1060).unwrap(), 1);
         wait_until(10, || {
             taker
                 .session(&id)
-                .map(|s| s.session.phase == Phase::GhostLocked)
+                .map(|s| s.session.phase == Phase::OpacusLocked)
                 .unwrap_or(false)
         });
         wait_until(10, || {
@@ -476,7 +476,7 @@ mod tests {
         let m = maker.session(&id).unwrap();
         assert_eq!(m.xmr_tx_hash.as_deref(), Some("xmr-tx-svc"));
         let t = taker.session(&id).unwrap();
-        assert_eq!(t.ghost_tx_ref.as_deref(), Some("ghost-burn-svc"));
+        assert_eq!(t.opacus_tx_ref.as_deref(), Some("opacus-burn-svc"));
         assert!(maker
             .events()
             .iter()

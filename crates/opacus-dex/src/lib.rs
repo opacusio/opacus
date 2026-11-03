@@ -11,7 +11,7 @@
 //!    sendRawTransaction) over any [`rpc::Transport`].
 //!
 //! wOPACUS flow (see `contracts/wOPACUS.sol` in the repo):
-//! 1. Lock native GHOST with the bridge (opacus-bridge).
+//! 1. Lock native OPACUS with the bridge (opacus-bridge).
 //! 2. Bridge quorum attests; wOPACUS is minted to your EVM address.
 //! 3. `approve(wOPACUS, Router)` then `swap_exact_tokens_for_tokens(...)`.
 //! 4. To return: swap back to wOPACUS, `burn` via the bridge, unlock native.

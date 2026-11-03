@@ -4,7 +4,7 @@
 //! connection is full-duplex: frames read from a peer are applied to the
 //! session registry and the auto-replies (Accept, Claim) are written back
 //! on the same socket. The wire format is exactly the bridge's u32-LE
-//! length-prefixed JSON frames (protocol tag "ghost-swap-p2p-v1").
+//! length-prefixed JSON frames (protocol tag "opacus-swap-p2p-v1").
 //!
 //! Layout:
 //!
@@ -15,16 +15,16 @@
 //!  conn_loop (per socket)   read frame -> SwapNet::receive_frame -> replies
 //! ```
 //!
-//! Choreography (Maker sells GHOST, Taker sells XMR):
+//! Choreography (Maker sells OPACUS, Taker sells XMR):
 //!
 //! ```text
 //!  Maker (node A)                            Taker (node B)
 //!  connect(A -> B) -- Offer -->              receive(Offer) -> auto Accept
 //!               <-- Accept
 //!               <-- XmrLocked                publish_xmr_lock + send_wire
-//!  publish_ghost_lock -- GhostLocked (preimage!) -->
-//!               <-- Claim                    receive(GhostLocked) -> auto Claim
-//!  peer_claimed (preimage verified)          claim GHOST on-chain
+//!  publish_opacus_lock -- OpacusLocked (preimage!) -->
+//!               <-- Claim                    receive(OpacusLocked) -> auto Claim
+//!  peer_claimed (preimage verified)          claim OPACUS on-chain
 //!  -> claim XMR with the revealed preimage
 //! ```
 //!
@@ -254,7 +254,7 @@ fn msg_kind(m: &SwapNetMessage) -> &'static str {
         SwapNetMessage::Offer { .. } => "Offer",
         SwapNetMessage::Accept { .. } => "Accept",
         SwapNetMessage::XmrLocked { .. } => "XmrLocked",
-        SwapNetMessage::GhostLocked { .. } => "GhostLocked",
+        SwapNetMessage::OpacusLocked { .. } => "OpacusLocked",
         SwapNetMessage::Claim { .. } => "Claim",
         SwapNetMessage::Refund { .. } => "Refund",
     }
@@ -324,7 +324,7 @@ impl SwapNode {
     }
 
     /// Shared handle to the session registry (wallet / opacusd integration:
-    /// publish_xmr_lock, publish_ghost_lock, session inspection).
+    /// publish_xmr_lock, publish_opacus_lock, session inspection).
     pub fn net(&self) -> Arc<Mutex<SwapNet>> {
         Arc::clone(&self.net)
     }
@@ -606,7 +606,7 @@ mod tests {
         assert!(node.enforce_deadlines().is_empty());
     }
 
-    /// WG-18: a maker session left in GhostLocked past the claim window is
+    /// WG-18: a maker session left in OpacusLocked past the claim window is
     /// swept exactly once the deadline passes.
     #[test]
     fn deadline_sweep_refunds_maker_after_claim_window() {
@@ -615,7 +615,7 @@ mod tests {
         let id = node.broadcast_offer(&offer(), &PREIMAGE).unwrap();
 
         // The taker announces his XMR lock (implicit accept @ 1050), then
-        // the maker locks GHOST locally and reveals the preimage.
+        // the maker locks OPACUS locally and reveals the preimage.
         let xmr_frame = Frame::new(SwapNetMessage::XmrLocked {
             offer_id: id.clone(),
             xmr_tx_hash: "xmr-tx-sweep".to_string(),
@@ -626,7 +626,7 @@ mod tests {
         node.net()
             .lock()
             .unwrap()
-            .publish_ghost_lock(&id, "ghost-burn-sweep", 1060)
+            .publish_opacus_lock(&id, "opacus-burn-sweep", 1060)
             .unwrap();
 
         // claim window: both_locked 1060 + 200 -> deadline 1260
@@ -651,10 +651,10 @@ mod tests {
     fn offer() -> Offer {
         Offer::new(
             2_000_000_000_000, // 2 XMR
-            1_000_000_000,     // GHOST atoms
+            1_000_000_000,     // OPACUS atoms
             100,               // fund timeout blocks
             200,               // claim timeout blocks
-            "ghost-maker-addr",
+            "opacus-maker-addr",
             "xmr-taker-addr",
             &PREIMAGE,
         )
@@ -697,11 +697,11 @@ mod tests {
     fn external_offer_wire_with(preimage: [u8; 32]) -> (String, Vec<u8>) {
         let payload = SwapOfferPayload {
             xmr_piconero: 2_000_000_000_000,
-            ghost_atoms: 1_000_000_000,
+            opacus_atoms: 1_000_000_000,
             hashlock: hex_str(&hashlock_of(&preimage)),
             fund_timeout_blocks: 100,
             claim_timeout_blocks: 200,
-            maker_ghost_address: "ghost-maker-addr".to_string(),
+            maker_opacus_address: "opacus-maker-addr".to_string(),
             taker_xmr_address: "xmr-taker-addr".to_string(),
         };
         let id = offer_id_of(&payload);
@@ -807,13 +807,13 @@ mod tests {
                 .unwrap_or(false)
         });
 
-        let ghost = maker
+        let opacus = maker
             .net()
             .lock()
             .unwrap()
-            .publish_ghost_lock(&id, "ghost-burn-live2", 3060)
+            .publish_opacus_lock(&id, "opacus-burn-live2", 3060)
             .unwrap();
-        assert_eq!(maker.send_wire(&ghost).unwrap(), 1);
+        assert_eq!(maker.send_wire(&opacus).unwrap(), 1);
         wait_until(10, || {
             maker
                 .net()
@@ -824,7 +824,7 @@ mod tests {
                 .unwrap_or(false)
         });
         let m = maker.net().lock().unwrap().session(&id).unwrap().clone();
-        assert_eq!(m.session.phase, Phase::GhostLocked);
+        assert_eq!(m.session.phase, Phase::OpacusLocked);
         assert_eq!(m.xmr_tx_hash.as_deref(), Some("xmr-tx-live2"));
     }
 
@@ -944,7 +944,7 @@ mod tests {
     }
 
     /// THE e2e: two real nodes on two real TCP sockets, full swap
-    /// choreography Offer -> Accept -> XmrLocked -> GhostLocked -> Claim.
+    /// choreography Offer -> Accept -> XmrLocked -> OpacusLocked -> Claim.
     #[test]
     fn two_nodes_full_swap_over_tcp() {
         let maker = SwapNode::start(test_cfg()).unwrap();
@@ -985,21 +985,21 @@ mod tests {
                 .unwrap_or(false)
         });
 
-        // maker locks GHOST, reveals the preimage; taker auto-claims
-        let ghost = maker
+        // maker locks OPACUS, reveals the preimage; taker auto-claims
+        let opacus = maker
             .net()
             .lock()
             .unwrap()
-            .publish_ghost_lock(&id, "ghost-burn-e2e", 1060)
+            .publish_opacus_lock(&id, "opacus-burn-e2e", 1060)
             .unwrap();
-        assert_eq!(maker.send_wire(&ghost).unwrap(), 1);
+        assert_eq!(maker.send_wire(&opacus).unwrap(), 1);
         wait_until(10, || {
             taker
                 .net()
                 .lock()
                 .unwrap()
                 .session(&id)
-                .map(|t| t.session.phase == Phase::GhostLocked)
+                .map(|t| t.session.phase == Phase::OpacusLocked)
                 .unwrap_or(false)
         });
 
@@ -1017,10 +1017,10 @@ mod tests {
         let m = maker.net().lock().unwrap().session(&id).unwrap().clone();
         assert_eq!(m.xmr_tx_hash.as_deref(), Some("xmr-tx-e2e"));
         assert_eq!(m.session.role, Role::Maker);
-        assert_eq!(m.session.phase, Phase::GhostLocked);
+        assert_eq!(m.session.phase, Phase::OpacusLocked);
         let t = taker.net().lock().unwrap().session(&id).unwrap().clone();
-        assert_eq!(t.ghost_tx_ref.as_deref(), Some("ghost-burn-e2e"));
-        assert_eq!(t.session.phase, Phase::GhostLocked);
+        assert_eq!(t.opacus_tx_ref.as_deref(), Some("opacus-burn-e2e"));
+        assert_eq!(t.session.phase, Phase::OpacusLocked);
 
         // both directions actually saw traffic. Replied is logged right
         // AFTER the frame hits the socket (conn_loop writes, then logs),
@@ -1070,20 +1070,20 @@ mod tests {
             .any(|e| matches!(e, NodeEvent::Rejected(m) if m.contains("offer cap"))));
 
         // non-Offer frames keep flowing: the taker-side session still
-        // completes its GhostLocked -> Claim step after the cap drop
-        // (the choreography needs XmrLocked before GhostLocked)
+        // completes its OpacusLocked -> Claim step after the cap drop
+        // (the choreography needs XmrLocked before OpacusLocked)
         node.net()
             .lock()
             .unwrap()
             .publish_xmr_lock(&id1, "xmr-tx-capped", 1020)
             .unwrap();
-        let ghost = Frame::new(SwapNetMessage::GhostLocked {
+        let opacus = Frame::new(SwapNetMessage::OpacusLocked {
             offer_id: id1,
-            ghost_tx_ref: "ghost-burn-capped".to_string(),
+            opacus_tx_ref: "opacus-burn-capped".to_string(),
             height: 1050,
             preimage: hex_str(&[1u8; 32]),
         });
-        let replies = node.process_wire(&encode_frame(&ghost).unwrap()).unwrap();
+        let replies = node.process_wire(&encode_frame(&opacus).unwrap()).unwrap();
         assert_eq!(replies.len(), 1);
         assert!(matches!(
             decode_frame(&replies[0]).unwrap().msg,
@@ -1223,7 +1223,7 @@ mod tests {
 
     /// WG-22: an Offer with a VALID but wrong one-time sidecar is tracked
     /// (fail-closed structural validation passes), but the later
-    /// GhostLocked preimage fails the taker's re-derivation and the node
+    /// OpacusLocked preimage fails the taker's re-derivation and the node
     /// rejects the frame (a protocol violation closes the connection).
     #[test]
     fn sidecar_mismatch_rejected_in_process() {
@@ -1240,14 +1240,14 @@ mod tests {
             .unwrap()
             .publish_xmr_lock(&id, "xmr-tx-wg22n", 1050)
             .unwrap();
-        let ghost = Frame::new(SwapNetMessage::GhostLocked {
+        let opacus = Frame::new(SwapNetMessage::OpacusLocked {
             offer_id: id,
-            ghost_tx_ref: "ghost-burn-wg22n".to_string(),
+            opacus_tx_ref: "opacus-burn-wg22n".to_string(),
             height: 1060,
             preimage: hex_str(&PREIMAGE),
         });
         let err = node
-            .process_wire(&encode_frame(&ghost).unwrap())
+            .process_wire(&encode_frame(&opacus).unwrap())
             .unwrap_err();
         assert!(matches!(
             err,

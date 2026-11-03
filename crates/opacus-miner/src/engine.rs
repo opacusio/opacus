@@ -1,6 +1,6 @@
 //! Miner engine
 
-use crate::{ghosthash, MinerConfig, MinerStats, MiningMode};
+use crate::{opacushash, MinerConfig, MinerStats, MiningMode};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +29,7 @@ impl MinerEngine {
     pub fn run_blocking(&self, duration: Option<Duration>) -> anyhow::Result<()> {
         let threads = self.config.effective_threads();
         info!(
-            "Ghost Miner v{} | threads: {} | mode: {:?}",
+            "Opacus Miner v{} | threads: {} | mode: {:?}",
             crate::MINER_VERSION,
             threads,
             self.config.mode
@@ -48,7 +48,7 @@ impl MinerEngine {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let header = format!("ghost_block_{}", ts);
+        let header = format!("opacus_block_{}", ts);
         let mut header_hash = [0u8; 32];
         header_hash.copy_from_slice(blake3::hash(header.as_bytes()).as_bytes());
 
@@ -65,7 +65,7 @@ impl MinerEngine {
 
             let handle = std::thread::Builder::new()
                 .name(format!("opacus-miner-{}", thread_id))
-                .spawn(move || ghosthash::mine(&hh, difficulty, start, &stop, deadline, &counter))
+                .spawn(move || opacushash::mine(&hh, difficulty, start, &stop, deadline, &counter))
                 .expect("failed to spawn miner thread");
             handles.push(handle);
         }

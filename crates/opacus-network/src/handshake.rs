@@ -2,7 +2,7 @@
 //!
 //! Wire: the same u32-LE length-prefixed JSON framing as the swap node, but
 //! with its own protocol tag `opacus-net-v1` (the swap protocol keeps its
-//! deliberate `ghost-swap-p2p-v1` tag - nothing is renamed).
+//! deliberate `opacus-swap-p2p-v1` tag - nothing is renamed).
 //!
 //! Flow (mutual authentication, 3 frames):
 //!

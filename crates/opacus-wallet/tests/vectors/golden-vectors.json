@@ -1,7 +1,7 @@
 {
   "abstain": 12500000000,
   "accepted": 7,
-  "archive_id": "92a9d7e2e36ba63f6c934d24786785d637c1dfcb5845cae3bd4ba54b21541a04",
+  "archive_id": "6b8a3240b348c0f4998daa64862b09d0978c94049f4bf5700060326dd71eb37d",
   "class": "fund",
   "denominator": 1000000000000,
   "depth": 32,
@@ -11,7 +11,7 @@
   "outcome": "accepted",
   "quorum_met": true,
   "rejected": 2,
-  "result_hash": "9d895082ae00822a4aebac85202386eee9036d35e61f7795795b7a4daa7672d0",
+  "result_hash": "2e25d244a287d782bc90c5a1cc3ec80859e134da6968f4577bfb3b221cb76053",
   "seed": 42,
   "trace_rejections": {
     "duplicate_serial": 1,

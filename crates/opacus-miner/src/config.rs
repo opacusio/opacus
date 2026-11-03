@@ -26,7 +26,7 @@ impl Default for MinerConfig {
     fn default() -> Self {
         Self {
             mode: MiningMode::Solo,
-            pool_url: Some("pool.ghost.cash:3333".to_string()),
+            pool_url: Some("pool.opacus.network:3333".to_string()),
             pool_login: None,
             pool_password: "x".to_string(),
             node_rpc_url: "http://localhost:18081".to_string(),

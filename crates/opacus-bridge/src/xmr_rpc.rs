@@ -187,7 +187,7 @@ impl<T: Transport> WalletRpc<T> {
         Ok(hashes)
     }
 
-    /// Primary address of the opened wallet (for receiving GHOST proceeds
+    /// Primary address of the opened wallet (for receiving OPACUS proceeds
     /// side-effects, bookkeeping, etc).
     pub fn get_address(&self, account_index: u32) -> Result<String, XmrRpcError> {
         let res = self.jsonrpc("get_address", json!({"account_index": account_index}))?;

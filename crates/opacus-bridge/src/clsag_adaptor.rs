@@ -7,7 +7,7 @@
 //! `verRctCLSAGSimple` unmodified - i.e. [`crate::clsag_verify::verify_clsag`]
 //! with no changes. The completed signature, once visible on the Monero
 //! chain, hands the adaptor holder the secret `t` (the Monero-side half of
-//! on-chain swap enforcement; the Ghost-side half is WG-27).
+//! on-chain swap enforcement; the Opacus-side half is WG-27).
 //!
 //! Normative reference: docs/WG-CLSAG-adaptor-scope.md (design freeze).
 //!
@@ -43,7 +43,7 @@
 //! all scalars canonical (< l) before any cryptographic work; all points
 //! decompressible, not the identity and not small-order; degenerate secrets
 //! (x, t, z == 0) rejected at signing; nonce deterministic and
-//! domain-separated ("ghost-bridge/clsag-adaptor/nonce-v1" / ".../decoy-v1").
+//! domain-separated ("opacus-bridge/clsag-adaptor/nonce-v1" / ".../decoy-v1").
 
 use curve25519_dalek::constants::ED25519_BASEPOINT_POINT as B;
 use curve25519_dalek::edwards::EdwardsPoint;
@@ -55,8 +55,8 @@ use crate::clsag_verify::{
     HASH_KEY_CLSAG_AGG_0, HASH_KEY_CLSAG_AGG_1, HASH_KEY_CLSAG_ROUND,
 };
 
-const NONCE_TAG: &[u8] = b"ghost-bridge/clsag-adaptor/nonce-v1";
-const DECOY_TAG: &[u8] = b"ghost-bridge/clsag-adaptor/decoy-v1";
+const NONCE_TAG: &[u8] = b"opacus-bridge/clsag-adaptor/nonce-v1";
+const DECOY_TAG: &[u8] = b"opacus-bridge/clsag-adaptor/decoy-v1";
 
 /// CLSAG adaptor: a standard [`ClsigSig`-shaped signature section whose
 /// signer response is the pre-signature `s'_di`, plus the bilateral

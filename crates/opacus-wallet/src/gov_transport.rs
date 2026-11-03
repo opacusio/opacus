@@ -67,7 +67,7 @@ use crate::gov::{GovBallot, GovError};
 /// Wire version of the ballot envelope.
 pub const ENVELOPE_VERSION: u8 = 1;
 
-/// Envelope magic: "Ghost Ballot Envelope v1".
+/// Envelope magic: "Opacus Ballot Envelope v1".
 pub const ENVELOPE_MAGIC: [u8; 4] = *b"GBE1";
 
 /// Cleartext header: magic 4 || version 1 || gip 4 || transition 1 ||
@@ -270,7 +270,7 @@ impl BallotEnvelope {
 // ---------------------------------------------------------------------------
 
 /// Domain tag of the minutes fingerprint.
-pub const ARCHIVE_TAG: &[u8] = b"ghost-ballot-archive-v1";
+pub const ARCHIVE_TAG: &[u8] = b"opacus-ballot-archive-v1";
 
 /// The verdict of one archive ingest. Cryptographic verdicts are NOT
 /// taken here - the tally owns them; the archive only dedupes byte-equal

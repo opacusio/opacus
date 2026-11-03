@@ -11,12 +11,12 @@ The current implementation (witnessed, keys.rs:21-58):
 
 - `SpendingKey::generate()` draws 32 bytes from the caller-provided `RngCore + CryptoRng`,
   hashes them with blake3, and formats the digest as the pseudo-mnemonic
-  `"ghost {} {} ..." x11 hex chunks` - a "ghost"-prefixed hex string split into
+  `"opacus {} {} ..." x11 hex chunks` - a "opacus"-prefixed hex string split into
   12 pseudo-words.
 - `SpendingKey::from_mnemonic()` validates only `split_whitespace().count() >= 12`.
 - Spend and view keys are derived as
-  `blake3("ghost_spend_derive_v1" || mnemonic)` and
-  `blake3("ghost_view_derive_v1" || mnemonic)`.
+  `blake3("opacus_spend_derive_v1" || mnemonic)` and
+  `blake3("opacus_view_derive_v1" || mnemonic)`.
 
 Problems, ordered by severity:
 
@@ -26,7 +26,7 @@ Problems, ordered by severity:
 2. **No KDF.** Derivation is one unkeyed hash evaluation. If the phrase leaks, key
    extraction is instantaneous; there is no stretching to slow offline brute force of
    weak human-chosen phrases.
-3. **Non-standard format.** "ghost-prefixed hex chunks" cannot be imported into or
+3. **Non-standard format.** "opacus-prefixed hex chunks" cannot be imported into or
    exported from any standard wallet and have no test-vector ecosystem.
 4. **Count is not validation.** A word-count check accepts arbitrary garbage; typos in
    hex chunks are indistinguishable from valid words.
@@ -43,12 +43,12 @@ Problems, ordered by severity:
    Optional **passphrase** (the "25th word") is supported; default empty.
 3. Key derivation keeps the existing domain-separated blake3 construction, re-tagged to
    prevent cross-version confusion:
-   - `spend = blake3("ghost_spend_derive_v2" || seed)`
-   - `view  = blake3("ghost_view_derive_v2" || seed)`
+   - `spend = blake3("opacus_spend_derive_v2" || seed)`
+   - `view  = blake3("opacus_view_derive_v2" || seed)`
    BIP-32 hierarchical derivation is explicitly out of scope (no multi-account need today).
 4. **Breaking change, no legacy path by default.** v1 pseudo-mnemonics are rejected by the
    new restore path. Rationale: current keys are testnet-only throwaways (witnessed:
-   publish_ghost.ps1 header - "Testnet keys are throwaway and never committed"); migrating
+   publish_opacus.ps1 header - "Testnet keys are throwaway and never committed"); migrating
    real funds is not applicable at this stage. The breaking change must be documented in
    CHANGELOG.
 5. Dependency: the maintained `bip39` crate (rust-bitcoin org) with the `zeroize` feature;

@@ -8,9 +8,33 @@ development phase; every further change will be added here following the
 
 Opacus is a privacy payment network that fuses Monero-style ring-CT semantics
 with Zcash-style Halo2 FCMP++ spend proofs, plus an Ethereum-side wrapped
-token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
+token (wOPACUS) and tooling for bridging, DEX swaps and atomic swaps.
 
 ## [Unreleased]
+
+### Changed
+
+- Project rebrand completed: the legacy internal codename is scrubbed
+  from the entire tree. The consensus and wire domain tags are renamed
+  (`OPACUS/v4/...`, `OPACUS/v5/...`, `opacus_final_v1` PoW tag,
+  `opacus-ballot-archive-v1`, `opacus-swap-p2p-v1`), the swap wire
+  states and fields follow (`OpacusLocked`, `opacus_atoms`,
+  `maker_opacus_address`), the miner core is `opacushash`, the node
+  data dir is `~/.opacus`, the env surface is `OPACUS_NET*` /
+  `OPACUS_SWAP*`, the key-derivation domain tags follow
+  (`opacus_spend_derive_v2` / `opacus_view_derive_v2`, the pinned
+  official-vector spend/view rows recomputed over the published BIP-39
+  phrases and seeds), and the ticker reads OPACUS. The CLI ships the single
+  canonical binary name `opacus` (the duplicate second bin target is
+  gone); the daemon stays `opacusd`. Renamed with the code:
+  `opacus-miner/src/opacushash.rs`, `contracts/wopacus.address`. The
+  one-off migration scripts of the early deployment rounds are removed
+  from the repo root; `deploy_wopacus.ps1` and `publish_opacus.ps1`
+  remain as the deploy/publish entry points. Pre-mainnet window: the
+  parameter-set rename is consensus-visible, so the R0 golden vectors
+  and the R1 drop-dir artifacts are regenerated deterministically (same
+  seed, same shape, new tags) and the R2 smoke is re-validated on the
+  renamed surface.
 
 ### Added
 
@@ -35,7 +59,7 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   R'_di + T_h == R_H; the signer index di is bilateral off-chain data
   and stays hidden on-chain (the completed signature is an ordinary
   CLSAG). Deterministic domain-separated nonce
-  (ghost-bridge/clsag-adaptor/nonce-v1 / .../decoy-v1); fail-closed
+  (opacus-bridge/clsag-adaptor/nonce-v1 / .../decoy-v1); fail-closed
   discipline: canonical scalars < l, decompressible and non-degenerate
   T / T_h / R_G / R_H / I / D / ring points, degenerate secrets (x, t,
   z = 0) rejected at signing, non-canonical t rejected at completion.
@@ -49,18 +73,18 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 
 - WG-CLSAG-adaptor-int swap protocol integration (opacus-bridge,
   `xmr_swap.rs` + `swap_p2p.rs`): the CLSAG adaptor becomes a
-  fail-closed part of the XMR <-> GHOST swap coordination protocol,
+  fail-closed part of the XMR <-> OPACUS swap coordination protocol,
   closing the deferred section-6 item of the adaptor scope doc. The
   taker pre-signs the Monero-side claim spend of the locked XMR via
   `XmrClaimAdaptor::build` (over `sign_adaptor`) bound to the swap
-  secret t = hash_to_scalar("ghost-bridge/swap-secret-v1" || preimage)
+  secret t = hash_to_scalar("opacus-bridge/swap-secret-v1" || preimage)
   - reduced mod l by the monerod hash_to_scalar, domain-separated from
   the hashlock and the WG-21 offer OTK - and the bilateral claim
-  message blake3("ghost-swap/xmr-claim-msg-v1" || offer_id ||
+  message blake3("opacus-swap/xmr-claim-msg-v1" || offer_id ||
   hashlock). The adaptor rides the existing Claim frame as an OPTIONAL
   Frame-level sidecar `xmr_claim` (hex `XmrClaimSidecar`, serde
   default: v1 frames decodable, old binaries ignore the field, offer
-  ids untouched); the taker attaches it in GhostLocked via
+  ids untouched); the taker attaches it in OpacusLocked via
   `attach_xmr_claim` and sends it with `publish_claim` (driving the
   local state machine to Claimed). The maker's Claim handler verifies
   the adaptor against THIS swap (`verify_for`: message binding + the
@@ -83,7 +107,7 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   SwapNet::receive_frame). Scope doc
   docs/WG-CLSAG-adaptor-int-scope.md. opacus-bridge: 110 -> 127 lib
   tests.
-- GIP-0, the Ghost Improvement Proposal process (docs-only,
+- GIP-0, the Opacus Improvement Proposal process (docs-only,
   `docs/gips/GIP-0-gip-process.md`, ZIP 0 analog): GIP types
   (Standards Track / Process / Informational), lifecycle
   Draft -> RFC (>= 7 days) -> Accepted -> Activated (+ Rejected /
@@ -269,7 +293,7 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   gadget suite): the vote chain `vs_key = Poseidon_3(a, b, DOM_VSK)`,
   `vote_rho = Poseidon_3(rho, proposal, DOM_VRHO)`,
   `VS = Poseidon_3(vs_key, vote_rho, DOM_VS)` with NEW domain constants
-  DOM_VSK / DOM_VRHO / DOM_VS (`GHOST/v4/dom/{vsk,vrho,vs}` labels) -
+  DOM_VSK / DOM_VRHO / DOM_VS (`OPACUS/v4/dom/{vsk,vrho,vs}` labels) -
   domain-separated from the spend nullifier, so a vote never reveals or
   burns spending capability [GIP-2 7]. One `BallotCircuit<DEPTH, K>`
   proof per ballot (K in 1..=8, GIP-2 P-2) proves, from public
@@ -287,7 +311,7 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   K = 8 at mainnet depth 32 -> k = 13 (K = 1 test shape -> k = 9).
   Mock + real-prover paths with a (DEPTH, K)-keyed process keyset cache
   (the WG-17 pattern). Ballot binding signature (GIP-2 3.2) signs the
-  ballot sighash `blake3("GHOST/v4/gov/sighash", ...)` under a
+  ballot sighash `blake3("OPACUS/v4/gov/sighash", ...)` under a
   per-ballot keypair `bsk = H(owner shares, proposal)`,
   `bvk = [bsk] * R`: only the owner of both key shares can sign, the
   choice flip breaks verification, and the verification key does not
@@ -391,7 +415,7 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   fund window remains bridge-side, pre-consensus by design).
 - WG-29 enc_notes (S4 7): in-transaction note encryption, end to end.
   The v5 builder seals every output note to the recipient's note key
-  (D3: note_sk = scalar(blake3("ghost_note_derive_v1" || seed)) with a
+  (D3: note_sk = scalar(blake3("opacus_note_derive_v1" || seed)) with a
   zeroizing wrapper) using the ristretto ECIES extracted to
   crates/opacus-crypto/src/ecies.rs (D4/D5: ephemeral scalar,
   blake3 derive_key keystream + keyed MAC, MAC verified before any
@@ -414,7 +438,7 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
 - WG-CLSAG monerod-facing CLSAG verification (opacus-bridge,
   `clsag_verify.rs`): a byte-compatible re-implementation of monerod's
   `verRctCLSAGSimple` + `get_pre_mlsag_hash` on the bridge's own fe25519
-  layer, so the Ghost side cryptographically confirms the Monero legs of
+  layer, so the Opacus side cryptographically confirms the Monero legs of
   atomic swaps (lock / claim / refund). A binary v2 tx parser covers
   tagged key outputs (`txout_to_tagged_key`), `ecdhInfo`/`outPk` without
   counter prefixes, Bulletproof and BulletproofPlus range proofs, and the
@@ -480,8 +504,8 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   from the injected CSPRNG and yields a 24-word phrase; the restore path
   (`from_mnemonic`) enforces wordlist membership AND checksum, deriving the seed
   via PBKDF2-HMAC-SHA512 (2048 iterations, 64 bytes). Spend/view derivation is
-  re-tagged to `ghost_spend_derive_v2` / `ghost_view_derive_v2` over the BIP-39
-  seed. v1 pseudo-mnemonics ("ghost <hex chunks>") are rejected - testnet-only
+  re-tagged to `opacus_spend_derive_v2` / `opacus_view_derive_v2` over the BIP-39
+  seed. v1 pseudo-mnemonics ("opacus <hex chunks>") are rejected - testnet-only
   keys, no migration path.
 
 - opacus-zk (WG-17): process-wide keyset cache for the v4 spend prover -
@@ -508,11 +532,11 @@ token (wGHOST) and tooling for bridging, DEX swaps and atomic swaps.
   checks, QuorumConfigured event, no updateQuorum), the mint digest
   binds block.chainid under the "opacus-lock-v1" domain, the EIP-2
   low-s range is enforced, and the forge suite grew to 10 tests. The
-  legacy wGHOST Sepolia deployment cannot be renamed in place (the name
+  legacy wOPACUS Sepolia deployment cannot be renamed in place (the name
   compiles into the deployed bytecode); its address record stays in
-  contracts/wghost.address until the redeploy round.
-- opacus-dex: wghost module renamed to wopacus (WOPACUS_ADDRESS env,
-  legacy WGHOST_ADDRESS fallback); ABI encoder gained dynamic string
+  contracts/wopacus.address until the redeploy round.
+- opacus-dex: wopacus module renamed to wopacus (WOPACUS_ADDRESS env,
+  legacy WOPACUS_ADDRESS fallback); ABI encoder gained dynamic string
   support (two-pass head/tail); burn() and topics match the contract.
 
 ### Fixed
@@ -748,12 +772,12 @@ with the workspace gate (fmt, tests, clippy -D warnings) fully green.
 - workspace version bump 0.4.0 -> 0.5.0
 ### Changed
 - Rebrand: the workspace moved to the opacusio GitHub org and every crate
-  was renamed `ghost-*` -> `opacus-*` (packages, libraries, the
-  `cli/ghost` -> `cli/opacus` binary `ghost` -> `opacus`, workspace
+  was renamed `opacus-*` -> `opacus-*` (packages, libraries, the
+  `cli/opacus` -> `cli/opacus` binary `opacus` -> `opacus`, workspace
   members, cross-crate dependencies, imports, benches, CI and docs).
-  Deliberately unchanged: wire-protocol strings (`ghost-swap-p2p-v1`,
-  `ghost-swap-offer-id-v1`), circuit domain labels (`GHOST/v4/*`), the
-  Poseidon label (`ghost-zk-poseidon-v1`) and the wGHOST token.
+  Deliberately unchanged: wire-protocol strings (`opacus-swap-p2p-v1`,
+  `opacus-swap-offer-id-v1`), circuit domain labels (`OPACUS/v4/*`), the
+  Poseidon label (`opacus-zk-poseidon-v1`) and the wOPACUS token.
 
 - Deferred: v4 prover optimization (EC-chain column count, membership-path count) retargeted to the next minor release.
 ## [0.4.0] - 2026-10-20
@@ -766,7 +790,7 @@ prover benchmark, and a documentation refresh
 
 ### Added
 
-#### crates/ghost-zk - v4 gates and the full spend circuit (phases 1a, 1b, 2)
+#### crates/opacus-zk - v4 gates and the full spend circuit (phases 1a, 1b, 2)
 - v4 foundations: rc-limb range-check gates, v4-hash gates, generator test
   vectors.
 - Fixed-base scalar-mul chip: RC = v*V + r*R and the H_leaf*G3 term are
@@ -787,14 +811,14 @@ prover benchmark, and a documentation refresh
 - acc_root_point bridge between the Fp accumulator root and the
   curve-point form consumed by sighash_v4.
 
-#### crates/ghost-wallet - tx v4 serialization and zk-native flow (phase 3)
+#### crates/opacus-wallet - tx v4 serialization and zk-native flow (phase 3)
 - tx_v4.rs: canonical v4 transaction serialization feeding the exact
   15-slot instance vector; build_zk_spend_v4 and confirm_zk_tx mirroring
   the consensus confirmation order.
 - The wallet end-to-end cycle (build / prove / verify / confirm) is green
   at mainnet tree depth 2^32.
 
-#### crates/ghost-consensus - consensus v4 validation (phase 4)
+#### crates/opacus-consensus - consensus v4 validation (phase 4)
 - accept_transaction: v4 validation order [S4 9] - parse, proof verify,
   balance and binding signature, nullifier seen-set, tree root, fee
   floor, commit - with zero state mutation before ALL checks pass.
@@ -805,20 +829,20 @@ prover benchmark, and a documentation refresh
 - ConsensusParams (with testnet()) and ConsensusState (mainnet(), tree +
   seen-set), the Accept/Reject taxonomy, and confirm_v4_consensus.
 
-#### crates/ghost-node - daemon submit gate (phase 4)
+#### crates/opacus-node - daemon submit gate (phase 4)
 - submit_transaction routes every incoming transaction through consensus
   accept_transaction; rejections surface as TxRejected before any pool or
   state effect; the daemon exposes params() and consensus().
 
 #### repository - bench, docs, release (phase 5)
-- crates/ghost-zk/benches/prover.rs: deterministic full-pipeline v4 spend
+- crates/opacus-zk/benches/prover.rs: deterministic full-pipeline v4 spend
   benchmark (prove_v4 / verify_v4 stage timing) at 2^32 leaves; zero new
   dependencies; run with
-  `cargo bench -p ghost-zk --features real-prover --bench prover`.
+  `cargo bench -p opacus-zk --features real-prover --bench prover`.
 - README.md refreshed for v0.4.0 (v4 sections, bench, updated test
   matrix, Apache-2.0 license note); workspace version bumped to 0.4.0;
   CHANGELOG updated; v0.4.0 tag and GitHub release published via the
-  release_ghost.ps1 path.
+  release_opacus.ps1 path.
 
 ### Performance
 
@@ -841,7 +865,7 @@ Initial public release.
 
 ### Added
 
-#### crates/ghost-zk - Halo2 FCMP++ zero-knowledge layer
+#### crates/opacus-zk - Halo2 FCMP++ zero-knowledge layer
 - Poseidon permutation (t=3, x^5 S-box, 64 uniform full rounds, circ(2,1,1)
   MDS matrix, blake3-derived round constants) over the Pasta (Vesta) scalar
   field, with a commutative tree hash h_tree = P(D, a+b, a*b) that removes
@@ -860,7 +884,7 @@ Initial public release.
   a real spend proof at mainnet tree depth 2^32 proves and verifies in
   about 2.1 s.
 
-#### crates/ghost-wallet - shielded wallet layer
+#### crates/opacus-wallet - shielded wallet layer
 - zk_spend.rs: canonical Fp <-> 32-byte serialization, persistable
   WalletNote, in-memory TreeState with a mainnet() constructor, witness
   builder, and ZkSpendTx build/verify helpers that prove and self-verify
@@ -874,24 +898,24 @@ Initial public release.
 - End-to-end mainnet-depth test: full build/prove/verify/confirm cycle of
   a shielded payment at tree depth 2^32.
 
-#### crates/ghost-bridge - Monero bridge
+#### crates/opacus-bridge - Monero bridge
 - xmr_dleq.rs: cross-group Schnorr DLEq proving that one scalar controls
   both the Monero/Edwards key and the Ristretto key (blake3 challenge,
   wide mod-l reduction, 96-byte serialization).
 - xmr_swap.rs: atomic-swap state machine Offered -> Accepted -> XmrLocked
-  -> GhostLocked -> Claimed/Refunded with fund/claim timeouts, Maker/Taker
+  -> OpacusLocked -> Claimed/Refunded with fund/claim timeouts, Maker/Taker
   roles, blake3 hashlock, and observable lock transitions.
 - xmr_rpc.rs: monero-wallet-rpc client (transfer with unlock_time and
   payment_id = hashlock, get_transfers filtered by payment_id, balance and
   address queries) plus monerod get_info, behind a Transport trait with
   fake-transport tests.
 - swap_p2p.rs: swap P2P protocol core - SwapNetMessage enum (Offer, Accept,
-  XmrLocked, GhostLocked carrying the preimage, Claim, Refund), u32-LE
+  XmrLocked, OpacusLocked carrying the preimage, Claim, Refund), u32-LE
   length-prefixed JSON framing, tamper-evident blake3 offer ids, and a
   session registry that reuses the xmr_swap state machine as the single
   source of truth (replay, duplicate, forged-claim and timeout validation).
 
-#### crates/ghost-dex - Ethereum side (new crate)
+#### crates/opacus-dex - Ethereum side (new crate)
 - Minimal RLP encoder/decoder verified against known vectors.
 - ABI encoding with keccak selectors (Uniswap V2 well-known selectors
   verified), including head/tail encoding with dynamic offsets.
@@ -904,38 +928,38 @@ Initial public release.
 - Ethereum JSON-RPC client (eth_call, gasPrice, transaction nonce,
   estimateGas, sendRawTransaction) over blocking HTTP with fake-transport
   tests.
-- wGHOST helpers: set_wghost/burn calldata and Mint/Burn event topics.
+- wOPACUS helpers: set_wopacus/burn calldata and Mint/Burn event topics.
 
-#### crates/ghost-network - swap node
-- swap_node.rs: TCP swap node reusing ghost-bridge::swap_p2p - framed
+#### crates/opacus-network - swap node
+- swap_node.rs: TCP swap node reusing opacus-bridge::swap_p2p - framed
   socket I/O with declared-length caps, SwapNodeConfig, listener plus
   bootstrap dialing, a full-duplex connection loop with automatic protocol
-  replies (Offer->Accept, GhostLocked->Claim) on the same socket,
+  replies (Offer->Accept, OpacusLocked->Claim) on the same socket,
   protocol-violation disconnects, and a bounded node-event ring log.
 - End-to-end test: complete swap choreography Offer -> Accept -> XmrLocked
-  -> GhostLocked (preimage) -> Claim across two live TCP nodes on
+  -> OpacusLocked (preimage) -> Claim across two live TCP nodes on
   127.0.0.1:0.
 
-#### contracts/ - wGHOST token
-- wGHOST.sol: ERC-20 wrapper with quorum-gated mint (sorted-signature
+#### contracts/ - wOPACUS token
+- wOPACUS.sol: ERC-20 wrapper with quorum-gated mint (sorted-signature
   ecrecover check) and burn-for-release; deployed to the Sepolia testnet
-  (address tracked in contracts/wghost.address), quorum threshold 1/1 for
+  (address tracked in contracts/wopacus.address), quorum threshold 1/1 for
   testnet. Marked AUDIT REQUIRED.
-- wGHOST.s.sol + foundry.toml: reproducible forge deployment script with
+- wOPACUS.s.sol + foundry.toml: reproducible forge deployment script with
   environment-configured quorum signers (kept minimal pending forge-std
   restore).
 
 #### Repository root - zero-typing Windows tooling (PowerShell)
-- Sepolia deploy chain: run_sepolia_deploy.ps1 (funds gate, in-process
-  deployer key) -> deploy_wghost.ps1 -> finalize_wghost.ps1 (bytecode gate,
-  soft token calls, hard quorum cross-checks, WGHOST_ADDRESS persistence).
-- fix_deployer_key.ps1: zero-input deployer key rotation with
-  cross-verification.
-- publish_ghost.ps1: safe one-command GitHub publish (secret gates, no
+- Sepolia deploy chain (historical): funds gate -> deploy_wopacus.ps1 ->
+  bytecode gate with soft token calls, hard quorum cross-checks and
+  WOPACUS_ADDRESS persistence. The one-off migration scripts of these
+  early rounds were removed in the rebrand pass; the deploy and publish
+  entry points remain.
+- publish_opacus.ps1: safe one-command GitHub publish (secret gates, no
   force-push).
 
 ### Fixed
-- ghost-zk did not compile (16 errors: E0061/E0382/E0425/E0599): the crate
+- opacus-zk did not compile (16 errors: E0061/E0382/E0425/E0599): the crate
   was adapted to the actual halo2_proofs 0.3.5 (zcash lineage) API -
   closure-based assign_advice/assign_fixed, query_fixed without rotation,
   Selector::enable instead of Region::enable_selector, AssignedCell::
@@ -946,7 +970,7 @@ Initial public release.
   (about 137 GB) replaced by empty-subtree-root padding.
 - EIP-155 signing originally used SHA-256 as the prehash - replaced with
   keccak256 and the correct v = parity + 35 + 2*chainId.
-- ghost-bridge Cargo.toml crashed cargo ("cannot extend value of type
+- opacus-bridge Cargo.toml crashed cargo ("cannot extend value of type
   inline table with a dotted key") when dependency insertion met
   workspace-inheritance manifests (serde.workspace = true): the manifest
   was repaired to a self-contained form; non-conflicting workspace
@@ -958,7 +982,7 @@ Initial public release.
 ### Security
 - Deployer key hygiene: the globally known public Foundry anvil #0 key
   (0xf39F...92266) was detected as the Sepolia deployer and sole quorum
-  member (anyone could mint wGHOST) and rotated to a freshly generated
+  member (anyone could mint wOPACUS) and rotated to a freshly generated
   random key. deployer.key is never committed; the old key is kept only in
   a local git-ignored .bak file.
 - Repository publishing excludes secrets by construction: a .gitignore
@@ -967,9 +991,9 @@ Initial public release.
   keeping the files on disk; commits use the noreply GitHub identity.
 
 ### Test status (zero warnings in all crates)
-- ghost-zk: 10 + 11 (real-prover) + 1 mainnet-depth mock
-- ghost-wallet: 7 fast + 2 mainnet-depth end-to-end
-- ghost-bridge: 27 | ghost-dex: 13 | ghost-network: 8
+- opacus-zk: 10 + 11 (real-prover) + 1 mainnet-depth mock
+- opacus-wallet: 7 fast + 2 mainnet-depth end-to-end
+- opacus-bridge: 27 | opacus-dex: 13 | opacus-network: 8
 
 ### Known limitations / roadmap
 - Value conservation is not yet enforced in-circuit (v0.4 accumulator per
@@ -978,7 +1002,7 @@ Initial public release.
 - Swap enforcement is off-chain in v0.1: hashlock-in-circuit and CLSAG
   adaptor signatures are planned for v0.4; Refund frames are notices;
   swap heights are taken from configuration.
-- ghost-network has direct dials only; peer discovery/gossip and peer
+- opacus-network has direct dials only; peer discovery/gossip and peer
   authentication (DLEq-bound identities) are planned next.
 - Encrypted note transmission between wallets (out-of-band note-secret
   transfer today) is a networking-phase item.

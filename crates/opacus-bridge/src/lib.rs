@@ -1,4 +1,4 @@
-//! Ghost Bridge - Monero <-> Ghost atomic swaps
+//! Opacus Bridge - Monero <-> Opacus atomic swaps
 
 pub mod adaptor;
 pub mod clsag;

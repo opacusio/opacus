@@ -1,4 +1,4 @@
-//! GHOST v0.4 Phase 1b: the rc-fixed-base gate.
+//! OPACUS v0.4 Phase 1b: the rc-fixed-base gate.
 //!
 //! Implements the fixed-base part of the v0.4 specification
 //! (`docs/specs/v0.4-value-conservation.md`, referenced below as [S4]):

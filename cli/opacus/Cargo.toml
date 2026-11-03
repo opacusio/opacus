@@ -8,13 +8,6 @@ license.workspace = true
 name = "opacus"
 path = "src/main.rs"
 
-# R2 (WP-D2a): the runbook launch surface is `ghost ...` - the product
-# name the CLI help already uses. Same program, second target name, so
-# `./target/release/ghost start --network testnet` is literally true.
-[[bin]]
-name = "ghost"
-path = "src/main.rs"
-
 [dependencies]
 opacus-crypto = { path = "../../crates/opacus-crypto" }
 opacus-wallet = { path = "../../crates/opacus-wallet" }
