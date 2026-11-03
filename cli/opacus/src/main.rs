@@ -9,6 +9,13 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+/// R2 (WP-D2a): the default launch network. Pre-mainnet
+/// `select_consensus` maps BOTH strings to the single testnet
+/// parameter set (v4 active from genesis, zero fee floor), but the
+/// value is still validated strictly by the daemon (Node-1): an
+/// unknown name refuses startup before any socket or data dir exists.
+const DEFAULT_NETWORK: &str = "mainnet";
+
 #[derive(Parser)]
 #[command(
     name = "ghost",
@@ -26,6 +33,14 @@ enum Commands {
     Start {
         #[arg(long)]
         tor: bool,
+        /// Chain to run: "mainnet" | "testnet" (validated by the daemon
+        /// - Node-1; an unknown value refuses startup).
+        #[arg(long, default_value = DEFAULT_NETWORK)]
+        network: String,
+        /// Node data dir (default ~/.ghost). Pass a fresh path for a
+        /// clean-boot smoke run.
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
     },
     /// Mine Ghost
     Mine {
@@ -70,7 +85,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     match Cli::parse().command {
-        Commands::Start { tor } => start_node(tor).await?,
+        Commands::Start {
+            tor,
+            network,
+            data_dir,
+        } => start_node(tor, network, data_dir).await?,
         Commands::Mine {
             pool,
             address,
@@ -87,13 +106,39 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn start_node(tor: bool) -> anyhow::Result<()> {
-    println!("Starting Ghost Node... (Ctrl+C to stop)");
-    let config = DaemonConfig {
+fn default_data_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ghost")
+}
+
+/// The daemon launch surface (WP-D2a): the network string and the data
+/// dir flow from the CLI flags into `DaemonConfig` verbatim; the
+/// p2p/rpc ports and every unset knob keep the daemon defaults.
+fn daemon_config(network: String, data_dir: Option<PathBuf>, tor: bool) -> DaemonConfig {
+    DaemonConfig {
+        network,
         use_tor: tor,
+        data_dir: data_dir.unwrap_or_else(default_data_dir),
         ..Default::default()
-    };
-    let mut daemon = OpacusDaemon::new(config)?;
+    }
+}
+
+async fn start_node(tor: bool, network: String, data_dir: Option<PathBuf>) -> anyhow::Result<()> {
+    let config = daemon_config(network, data_dir, tor);
+    println!("Starting Ghost Node... (Ctrl+C to stop)");
+    println!("  network:  {}", config.network);
+    println!("  data dir: {}", config.data_dir.display());
+    // Node-1: construct the daemon FIRST - an unknown network refuses
+    // startup here, before any socket is bound or any file is written.
+    let mut daemon = OpacusDaemon::new(config.clone())?;
+    // R2 (WP-D2a): bind the authenticated p2p listener exactly like
+    // opacusd does. GHOST_NET=0 disables; GHOST_NET_PORT / GHOST_NET_ADDR
+    // / GHOST_NET_PEERS / GHOST_NET_ADVERTISE override the defaults
+    // (documented in opacus_node::net_service).
+    if !opacus_node::net_service::autostart(&config) {
+        println!("p2p listener not started (disabled or failed to bind)");
+    }
     daemon.run().await?;
     Ok(())
 }
@@ -236,4 +281,110 @@ fn wallet_dir() -> anyhow::Result<PathBuf> {
         .ok_or_else(|| anyhow::anyhow!("no home dir"))?
         .join(".ghost")
         .join("wallet"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ghost-cli-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ))
+    }
+
+    /// WP-D2a: the launch default stays "mainnet" (the pre-flag
+    /// behavior) and no data-dir override is set.
+    #[test]
+    fn start_defaults_to_mainnet() {
+        let cli = Cli::parse_from(["ghost", "start"]);
+        match cli.command {
+            Commands::Start {
+                tor,
+                network,
+                data_dir,
+            } => {
+                assert!(!tor);
+                assert_eq!(network, "mainnet");
+                assert!(data_dir.is_none());
+            }
+            _ => panic!("expected the start subcommand"),
+        }
+    }
+
+    /// WP-D2a: `ghost start --network testnet --data-dir <fresh>` parses
+    /// both flags - the runbook R2 smoke command is a real surface.
+    #[test]
+    fn start_parses_network_and_data_dir() {
+        let cli = Cli::parse_from([
+            "ghost",
+            "start",
+            "--network",
+            "testnet",
+            "--data-dir",
+            "/tmp/r2-fresh",
+        ]);
+        match cli.command {
+            Commands::Start {
+                network, data_dir, ..
+            } => {
+                assert_eq!(network, "testnet");
+                assert_eq!(data_dir, Some(PathBuf::from("/tmp/r2-fresh")));
+            }
+            _ => panic!("expected the start subcommand"),
+        }
+    }
+
+    /// WP-D2a: the flags land in the daemon config verbatim; the ports
+    /// keep the daemon defaults (p2p 18080 per the runbook stage).
+    #[test]
+    fn daemon_config_carries_flags_and_keeps_defaults() {
+        let cfg = daemon_config("testnet".into(), Some(tmp_dir("cfg")), true);
+        assert_eq!(cfg.network, "testnet");
+        assert!(cfg.use_tor);
+        assert_eq!(cfg.p2p_port, 18080);
+        assert_eq!(cfg.rpc_port, 18081);
+    }
+
+    /// WP-D2a: without --data-dir the node still targets ~/.ghost.
+    #[test]
+    fn daemon_config_defaults_to_home_dot_ghost() {
+        let cfg = daemon_config("mainnet".into(), None, false);
+        assert_eq!(
+            cfg.data_dir,
+            dirs::home_dir().expect("home dir").join(".ghost")
+        );
+        assert_eq!(cfg.network, "mainnet");
+        assert!(!cfg.use_tor);
+    }
+
+    /// Node-1 through the CLI surface: a typo'd network fails inside
+    /// `OpacusDaemon::new` - which `start_node` calls BEFORE the net
+    /// service could bind anything - and leaves no data dir behind.
+    #[test]
+    fn unknown_network_refuses_before_sockets() {
+        let dir = tmp_dir("badnet");
+        let cfg = daemon_config("mainet".into(), Some(dir.clone()), false);
+        let res = OpacusDaemon::new(cfg);
+        assert!(res.is_err(), "a typo'd network must refuse startup");
+        assert!(!dir.exists(), "no side effects before validation");
+    }
+
+    /// The accepted networks construct cleanly over a fresh data dir
+    /// (the exact shape of the R2 smoke boot).
+    #[test]
+    fn testnet_boots_over_fresh_data_dir() {
+        let dir = tmp_dir("boot");
+        let cfg = daemon_config("testnet".into(), Some(dir.clone()), false);
+        let daemon = OpacusDaemon::new(cfg).expect("testnet boot");
+        assert_eq!(daemon.params().v4_activation_height, 0);
+        assert_eq!(daemon.params().fee_floor, 0);
+        assert!(dir.exists(), "data dir created on boot");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

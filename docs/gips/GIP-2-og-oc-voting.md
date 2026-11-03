@@ -416,6 +416,46 @@ items answer the open questions of section 8 in order.
   dress-r1/minutes.json
   a581c5af0bc96a4bdf0d4e3665ec3aa07291e089f5703c533f4473cfc3d35609.
 
+  WP-D2a stage note (runbook stage R2 executed): the single-node
+  testnet smoke is delivered as the CLI launch surface
+  `cli/opacus/src/main.rs`: `ghost start` grows the `--network` flag
+  (default "mainnet" - the pre-flag behavior is preserved; the value
+  flows verbatim into `DaemonConfig` and is validated by the daemon,
+  Node-1, so a typo refuses startup BEFORE any socket is bound or any
+  file is written), the `--data-dir` flag (the "fresh data_dir"
+  definition of done becomes testable without touching the real home
+  dir), and the p2p autostart wiring - `ghost start` now calls
+  `opacus_node::net_service::autostart` exactly like opacusd, because
+  the stage-log item "p2p listener bound" needs a real listener
+  (GHOST_NET=0 still disables it; the flag order is daemon-first, so
+  an invalid network can never bind). The runbook commands say
+  `./target/release/ghost`, but the built binary was `opacus` - a
+  second bin target `ghost` (same main.rs) makes the runbook command
+  literally true. Six new bin-crate tests pin the surface: defaults
+  (mainnet, no data-dir override, no tor), the R2 smoke command
+  parses, flags land in `DaemonConfig` with the daemon port defaults,
+  the home default, the typo refusal with zero side effects, and a
+  testnet boot over a fresh dir. The smoke itself ran on rustc
+  1.99.1 release: negative boot `--network mainet` -> exit 1, no data
+  dir, no socket; `ghost start --network testnet --data-dir <fresh>`
+  -> "consensus: net=testnet | v4_activation_height=0 | fee_floor=0",
+  the net node listening on 0.0.0.0:18080, "Ghost node running",
+  killed with SIGINT after 25 s (the heartbeat stub runs forever);
+  `create-wallet` + `address` OK (throwaway wallet, seed redacted in
+  the committed log); `mine --solo --duration-secs 300` -> a
+  difficulty-1000 header solved in ~23 ms, the engine halts on block
+  found so the session completed in 5 s, observed 8.2 H/s on one
+  release thread (2-core container), reward address auto-derived from
+  the smoke wallet. The gap list is re-confirmed, not shrunk:
+  `daemon.run()` is still a heartbeat loop (no chain service - the
+  mined block is counted, not submitted to any state machine), the
+  RPC port is only echoed in the log line (no server), and the
+  wallet-gov bridge, gossip envelope channel and collector service
+  are exactly the remaining WP-D2b/D2c/D2d work items. Raw smoke log
+  committed as `docs/gips/GIP-2-r2-stage-log.txt`. Artifact hash
+  (sha256): GIP-2-r2-stage-log.txt
+  e831d73268bc90d3f8abea413461eb74f2886e8008d2ad2b4ddf1f32778140be.
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

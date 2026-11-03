@@ -7,7 +7,9 @@ this runbook pins the staged path from "all library parts exist" to
 
 Progress: R0 EXECUTED (WP-D0 delivered - see the WP-D0 stage note in
 GIP-2 section 9); R1 EXECUTED (WP-D1 delivered - see the WP-D1 stage
-note in GIP-2 section 9); R2..R4 pending.
+note in GIP-2 section 9); R2 EXECUTED (WP-D2a delivered - see the
+WP-D2a stage note in GIP-2 section 9, raw smoke log
+`docs/gips/GIP-2-r2-stage-log.txt`); R3..R4 pending.
 
 Every stage has an executable definition of done. Stages R0 and R1
 need only new harness code in opacus-wallet; no node changes. Stages
@@ -132,13 +134,22 @@ close statement; a tampered minutes file (one flipped byte) is
 rejected.
 
 ## 3. Stage R2 - single-node testnet smoke (build/run surface)
+    (EXECUTED: WP-D2a, `ghost start --network/--data-dir` + the real
+    `ghost` bin; boot/p2p/miner/wallet smoke log committed,
+    `docs/gips/GIP-2-r2-stage-log.txt`)
 
 Goal: prove the node bins build, boot and mine on the testnet
 parameter set. This is NOT a gov rehearsal: `daemon.run()` is a
 heartbeat stub today; the stage pins the launch surface and its
 gaps.
 
-Work item: CLI `--network` flag (WP-D2a, tiny).
+Work item: CLI `--network` flag (WP-D2a, tiny). Delivered together
+with: `--data-dir` (makes the "fresh data_dir" DoD testable without
+touching the real home dir), the p2p autostart wiring in
+`ghost start` (opacusd parity - the "p2p listener bound" stage-log
+item needs a real listener), and the `ghost` bin alias in
+opacus-cli (the runbook commands say `ghost`, the built binary said
+`opacus` - now both names build from the same main.rs).
 
 ```sh
 cargo build --release -p opacus-cli
