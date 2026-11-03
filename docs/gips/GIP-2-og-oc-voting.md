@@ -502,6 +502,58 @@ items answer the open questions of section 8 in order.
   remaining R3 items are WP-D2c (gossip envelope channel) and WP-D2d
   (collector service).
 
+  WP-D2c stage note (runbook stage R3, second item): the gossip
+  envelope channel is delivered as `crates/opacus-network/src/gov_channel.rs`,
+  closing the WP-3 delivery-note deferral verbatim ("Envelope ids ...
+  are defined for v5 gossip relay dedupe; wiring the gossip channel is
+  node-integration work"). The v5 note feed caps one sealed payload at
+  512 bytes while one GBE1 envelope at the rehearsal depth is ~22.7 KB,
+  so the channel is a deterministic chunk layout plus a bounded
+  reassembler: the sender chunks the envelope wire (`chunk_stream` -
+  every chunk except the last is exactly 441 bytes, the canonical split,
+  so one envelope maps to ONE chunk set), seals every chunk to the
+  collector NODE identity with the ordinary note ECIES (`seal_stream`)
+  and ships them in `Notes` frames of at most 32 blobs (`frames_of` -
+  the GBE1 size is exactly 2 frames); the network stores and relays the
+  chunks as ordinary notes and never interprets them (the chunk header
+  lives INSIDE the sealed payload: magic GOV1, version, total, index,
+  the 32-byte `stream_id` and a blake3 digest of the WHOLE payload);
+  the collector opens every inbox blob addressed to it (`feed_note` -
+  anything that fails to open is third-party relay traffic by design,
+  `Ok(None)`, never an error) and feeds `GovAssembler`, which
+  reassembles keyed by the `stream_id` - the caller passes the ballot
+  `envelope_id`, the WG-29 id digest under the ballot tags, so the
+  envelope-level dedupe is EXACT: a byte-equal retransmission arriving
+  over a different relay path carries different blob ids (fresh ECIES)
+  that the relay-level dedupe cannot catch, re-opens to the same chunk
+  bytes and is dropped by the assembler - each envelope emits exactly
+  once inside the dedupe window. Fail-closed discipline: a payload that
+  opens AND claims the channel magic but violates the protocol (bad
+  version, index out of range, zero total, non-canonical chunk width,
+  oversize data, conflicting (total, hash) for one stream, digest
+  mismatch at completion) is a hard error, never silently dropped;
+  completed streams are hash-checked before emission, so a chunk that
+  belongs to no honest stream can never complete one. Memory is
+  bounded on every axis: 441 bytes of data per chunk, 256 chunks per
+  stream (112,640-byte envelope cap - the DEPTH=32 GBE1 uses 52), the
+  live-stream count and the completed-stream window are capped (a
+  failed stream is dropped, not parked). Layer separation preserved:
+  the wallet's production dependency graph stays node-free (the
+  opacus-network dev-dependency exists only for the cross-layer test).
+  Tests: 11 in-module (canonical chunk layout incl. the 22,686-byte
+  GBE1 shape, out-of-order byte-exact reassembly, the full tamper
+  matrix, stream-conflict and hash-mismatch drops, live-stream and
+  seen-window bounds, seal/feed loopback with foreign and non-gov
+  blobs ignored, frame capping) plus the live-network e2e - voter ->
+  relay -> collector over three real NetNodes, the GBE1-sized stream
+  in 2 frames, and a fresh-seal retransmission that dedupes (3 chunks,
+  0 second emissions) - and the cross-layer wallet test
+  `tests/gov_gossip_channel.rs`: ONE real DEPTH=32 prove, the envelope
+  rides the channel end to end, comes back byte-equal, re-parses,
+  re-opens with the collector key, re-verifies and re-anchors against
+  the frontier. Remaining R3 items: WP-D2d (collector service) and the
+  scripted scenario.
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

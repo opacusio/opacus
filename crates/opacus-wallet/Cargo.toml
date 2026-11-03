@@ -23,3 +23,8 @@ path = "src/bin/dress/voter.rs"
 [[bin]]
 name = "dress_auditor"
 path = "src/bin/dress/auditor.rs"
+
+# GIP-2 WP-D2c: the cross-layer gossip test rides the network note path
+# (dev-only - the wallet's production dependency graph stays node-free).
+[dev-dependencies]
+opacus-network = { path = "../opacus-network" }
