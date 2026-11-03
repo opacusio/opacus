@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Opacus — private payments with zk spend proofs</title>
-<meta name="description" content="Opacus fuses Monero-style ring-CT semantics with Halo2 FCMP++ zero-knowledge spend proofs. Rust workspace, no trusted setup, Monero atomic swaps, wGHOST bridge. Testnet v0.7.0.">
+<meta name="description" content="Opacus fuses Monero-style ring-CT semantics with Halo2 FCMP++ zero-knowledge spend proofs. Rust workspace, no trusted setup, Monero atomic swaps, wOpacus bridge. Testnet v0.7.0.">
 <link rel="canonical" href="https://opacus.io/">
 <meta property="og:title" content="Opacus — private payments with zk spend proofs">
 <meta property="og:description" content="Monero-style ring-CT + Halo2 FCMP++ zk proofs. No trusted setup. Testnet v0.7.0.">
@@ -133,7 +133,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></div><h3>Transparent proving system</h3><p><code>halo2_proofs 0.3.5</code> (zcash lineage) with IPA commitments over the Pasta (Vesta) scalar field. No trusted setup — every constraint is auditable.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div><h3>Constant-memory tree</h3><p>A sparse Merkle frontier with empty-subtree-root padding computes roots and auth paths in O(leaves + depth) — the naive approach would need ~137 GB of RAM.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M7 17l4-4 3 3 5-6"/><path d="M3 3v18h18"/></svg></div><h3>Monero atomic swaps</h3><p>Cross-group Schnorr DLEq proofs, a hashlock state machine (<code>Offered → … → Claimed/Refunded</code>) and a length-prefixed P2P protocol with tamper-evident offer ids.</p></div>
-      <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg></div><h3>Ethereum bridge &amp; wGHOST</h3><p>Quorum-gated ERC-20 wrapper deployed to Sepolia, EIP-155 signer, Uniswap Router02 calldata builders and a JSON-RPC client — a full DEX/bridge toolchain.</p></div>
+      <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg></div><h3>Ethereum bridge &amp; wOpacus</h3><p>Quorum-gated ERC-20 wrapper deployed to Sepolia, EIP-155 signer, Uniswap Router02 calldata builders and a JSON-RPC client — a full DEX/bridge toolchain.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg></div><h3>Daemon &amp; CLI out of the box</h3><p><code>opacusd</code> runs the net and swap services and hands authenticated connections to the swap plane; <code>opacus-cli</code> drives the shielded wallet — build, prove, self-verify before any state mutation.</p></div>
     </div>
   </div>
@@ -168,7 +168,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
       <div class="cr"><code>opacus-crypto</code><span>keys, stealth addresses, Pedersen commitments</span></div>
       <div class="cr"><code>opacus-consensus</code><span>blocks &amp; transactions, nullifier-reuse prevention</span></div>
       <div class="cr"><code>opacus-bridge</code><span>Monero DLEq, atomic-swap FSM, RPC, swap P2P core</span></div>
-      <div class="cr"><code>opacus-dex</code><span>Ethereum: RLP, ABI, EIP-155, Uniswap calldata, wGHOST</span></div>
+      <div class="cr"><code>opacus-dex</code><span>Ethereum: RLP, ABI, EIP-155, Uniswap calldata, wOpacus</span></div>
       <div class="cr"><code>opacus-network</code><span>P2P: DLEq handshake, disco gossip, encrypted notes, swap-plane handover, TCP swap node</span></div>
       <div class="cr"><code>opacus-node</code><span>opacusd daemon: net + swap services wired, consensus-gated tx submission</span></div>
       <div class="cr"><code>opacus-light-client</code><span>compact block state and sync for light clients</span></div>
@@ -183,7 +183,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
     <div class="kicker">Roadmap</div>
     <h2>Shipped and next.</h2>
     <div class="tl">
-      <div class="it done"><b>v0.3 — first public release</b><span>zk core, shielded wallet, Monero bridge, DEX toolchain, swap node, wGHOST on Sepolia.</span></div>
+      <div class="it done"><b>v0.3 — first public release</b><span>zk core, shielded wallet, Monero bridge, DEX toolchain, swap node, wOpacus on Sepolia.</span></div>
       <div class="it done"><b>v0.4 — in-circuit value conservation</b><span>v4 prover bench, README/CHANGELOG refresh, accumulator per the complete FCMP++ design.</span></div>
       <div class="it done"><b>v0.5 — opacusd daemon &amp; opacus.io</b><span>daemon rename, workspace-wide opacus rebrand, canonical site and release engineering.</span></div>
       <div class="it done"><b>v0.6 — networking</b><span>persistent node identity, DLEq-bound authenticated handshake, peer discovery with disco gossip, encrypted note transmission between wallets.</span></div>
