@@ -112,7 +112,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
     <div class="stats">
       <div class="stat"><b>2.1 s</b><span>membership spend proof at 2³² tree depth</span></div>
       <div class="stat"><b>2³²</b><span>note-commitment tree capacity, constant memory</span></div>
-      <div class="stat"><b>445</b><span>workspace tests green · zero warnings · CI clippy -D warnings</span></div>
+      <div class="stat"><b>441</b><span>workspace tests green in CI · zero warnings · clippy -D warnings</span></div>
       <div class="stat"><b>0</b><span>trusted setup — IPA over Pasta (Vesta)</span></div>
     </div>
   </div>
@@ -147,7 +147,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
     <pre class="pre"><span class="k">$</span> git clone https://github.com/opacusio/opacus.git
 <span class="k">$</span> cd opacus
 <span class="k">$</span> cargo build --release
-<span class="k">$</span> cargo test --workspace            <span class="c"># 445 tests</span>
+<span class="k">$</span> cargo test --workspace            <span class="c"># 441 tests</span>
 
 <span class="c"># real (non-mock) IPA prover tests:</span>
 <span class="k">$</span> cargo test -p opacus-zk --features real-prover
