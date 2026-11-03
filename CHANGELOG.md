@@ -14,6 +14,13 @@ token (wOPACUS) and tooling for bridging, DEX swaps and atomic swaps.
 
 ### Changed
 
+- README data refresh to the current surface: the test-count and
+  timings line is re-measured on the post-v0.9.0 main (the stale
+  "258 tests as of v0.8.0" numbers are replaced), the WP-D0..D2d
+  delivery chain and the executed R3 dress rehearsal are documented in
+  the GIP-2 delivery notes, the quick start gains the canonical
+  `opacus start --network testnet` line, and the PROVER-10S bench
+  numbers are respelled with period decimal separators.
 - Project rebrand completed: the legacy internal codename is scrubbed
   from the entire tree. The consensus and wire domain tags are renamed
   (`OPACUS/v4/...`, `OPACUS/v5/...`, `opacus_final_v1` PoW tag,

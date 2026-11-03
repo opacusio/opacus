@@ -30,7 +30,7 @@ cargo build --release
 cargo test --workspace
 ```
 
-Typical timings on a modern machine (as of v0.8.0): clone ~20 s, release build ~2 min, full test run ~15-16 min - the consensus and wallet suites dominate it. 258 tests pass by default (0 failures); 3 slow full-depth (2^32 leaves) proof tests are ignored by default and can be run with:
+Typical timings on a modern machine: clone ~20 s, release build ~2 min, full test run ~15-20 min - the consensus and wallet suites dominate it. 441 tests pass by default (0 failures); 4 slow full-depth (2^32 leaves) proof tests are ignored by default and can be run with:
 
 ```
 cargo test --workspace -- --ignored
@@ -271,6 +271,12 @@ cargo test --workspace
 # real (non-mock) IPA prover tests:
 cargo test -p opacus-zk --features real-prover
 
+# run a local swap node (daemon: opacusd):
+cargo run --release -p opacus-node --bin opacusd
+
+# or a full testnet node via the canonical CLI:
+cargo run --release -p opacus-cli --bin opacus -- start --network testnet
+
 # prover benchmark - full v4 spend at 2^32 leaves (real IPA):
 cargo bench -p opacus-zk --features real-prover --bench prover
 
@@ -303,8 +309,8 @@ Performance: a membership-only spend proof at mainnet tree depth (2^32
 leaves) proves and verifies in about 2.1 s. The full v4 spend pipeline
 (real IPA, k = 11) runs on a process-wide keyset cache (WG-17): since
 PROVER-10S fuses 4 Poseidon rounds into every gate row, the WHOLE
-pipeline (keygen included) runs in 4,81 s cold, 2,26 s at
-steady-state prove with 0,03 s verify - inside the 10 s budget
+pipeline (keygen included) runs in 4.81 s cold, 2.26 s at
+steady-state prove with 0.03 s verify - inside the 10 s budget
 [S4 8] end to end. The bench gates BOTH numbers: `cargo bench -p
 opacus-zk --features real-prover --bench prover`. The monerod-facing
 CLSAG verify path (WG-CLSAG) gates its numbers the same way: on the
@@ -357,8 +363,8 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
 
 - Delivered (PROVER-10S): 4 Poseidon rounds fused per gate row - the
   mainnet MAX topology dropped 5103 -> 1551 rows (k = 13 -> 11) and the
-  whole cold pipeline (keygen included) runs in 4,81 s with
-  steady-state prove at 2,26 s - inside the 10 s budget [S4 8].
+  whole cold pipeline (keygen included) runs in 4.81 s with
+  steady-state prove at 2.26 s - inside the 10 s budget [S4 8].
 - Delivered (WG-26): the swap hashlock tail adds 54 rows
   (1551 -> 1605, k stays 11) - lock / claim / refund in-circuit [S4 12].
 - Delivered (WG-26): hashlock-in-circuit - swap lock / claim / refund
@@ -567,6 +573,30 @@ and the F4 zeroized identity secret (non-Copy SecretScalar wrapper).
   proposal mismatch, blind-archive + tally-Dust replay) + 4 new crypto
   tests (variable-length roundtrip, cross-instantiation isolation,
   tagged-derivation equivalence, short/tampered rejection).
+- Delivered (GIP-2 WP-D0..D2d, the P-9 dress-rehearsal chain): the
+  deterministic rehearsal harness (`examples/dress_rehearsal.rs` + the
+  R0 golden vectors and the replay test pinning the tally engine), the
+  drop-dir process bins (`dress_voter` / `dress_collector` /
+  `dress_auditor`), the CLI network surface (`opacus start --network
+  --data-dir` + the p2p autostart, the R2 single-node testnet smoke),
+  the wallet-gov bridge (`gov_inputs_at(h_open)` - wallet-real
+  frontiers and v4 notes feed `build_ballot`), the GBE1 gossip envelope
+  channel (canonical 441-byte chunks over the v5 note path, collector
+  reassembly keyed by the public envelope_id, byte-equal retransmission
+  dedupe) and the collector service (spool ingest, blind wire routing
+  into the reused BallotArchive, `state.json` persistence across the
+  separate ingest/close processes, close publishes the exact R1 minutes
+  schema).
+- Executed (GIP-2 stage R3, the P-9 gate): the scripted scenario - N=3
+  peering `opacus start` nodes + the solo miner, M=5 wallet-real
+  ballots over the WP-D2c channel into the WP-D2d collector (3 FOR / 1
+  AGAINST / 1 ABSTAIN; the re-sealed retransmission swallowed by the
+  assembler; the raw-only fallback accepted; the deliberate double vote
+  surfaced as `DuplicateSerial` under the canonical-order replay); the
+  close accepted (quorum + 72% approval) with the R1-schema minutes;
+  the offline auditor replay clean and a flipped minutes byte rejected.
+  Close artifacts committed under `tests/vectors/dress-r3/` and pinned
+  by the `gov_scenario_r3` CI replay test.
 - External security audit before any mainnet use - MANDATORY gate, see
   SECURITY.md ("Mainnet gate"); testnet keys are strictly one-time.
 
