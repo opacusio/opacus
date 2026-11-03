@@ -38,6 +38,19 @@ token (wOPACUS) and tooling for bridging, DEX swaps and atomic swaps.
 
 ### Added
 
+- GIP-2 stage R3 EXECUTED (the P-9 gate): the scripted gov rehearsal
+  on the testnet surface - N=3 peering `opacus start` nodes, the solo
+  miner, the maintainer declaration plus the collector routing key,
+  M=5 wallet-real ballots over the WP-D2c gossip channel into the
+  WP-D2d collector service (3 FOR / 1 AGAINST / 1 ABSTAIN, one
+  re-sealed retransmission swallowed by the assembler, one raw-only
+  fallback, one deliberate double vote surfacing as DuplicateSerial),
+  the close accepted (33.5e9 YES / 13e9 NO / 10.8e9 ABSTAIN, quorum
+  and 72% approval met), the offline auditor replay clean, a tampered
+  minutes byte rejected; the close artifacts committed under
+  `tests/vectors/dress-r3/` and pinned by the `gov_scenario_r3` CI
+  replay test; raw stage log `docs/gips/GIP-2-r3-stage-log.txt`.
+
 - GIP-2 WP-D2d collector service (opacus-node `gov_service.rs` + the
   `gov_collector` bin): the spool ingest endpoint speaks the WP-D2c
   gossip channel (one sealed channel blob per file, sorted drain,

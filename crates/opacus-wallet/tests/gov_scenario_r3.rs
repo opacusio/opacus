@@ -46,26 +46,57 @@ fn committed_r3_service_close_replays_and_tamper_is_rejected() {
     assert_eq!(body["declared"]["h_open"], 100);
     assert_eq!(body["declared"]["class"], "fund");
 
-    // The scenario shape: 5 honest ballots archived (3 FOR, 1 AGAINST,
-    // 1 ABSTAIN; the double vote is rejected at the tally, the raw
-    // fallback is one of the five), the close is the no-quorum branch.
+    // The scenario shape: the 5 honest ballots archived (3 FOR, 1
+    // AGAINST, 1 ABSTAIN via the raw-only fallback; the deliberate
+    // double vote is the rejected sixth entry), the close lands in the
+    // accepted branch of P-6: participation 57.3e9 of 1e12 clears the
+    // 5% Fund quorum and 33.5/(33.5+13) = 72% clears the 60% approval.
+    assert_eq!(body["entries"].as_array().expect("entries").len(), 6);
+    assert_eq!(body["tally"]["accepted"].as_u64().expect("accepted"), 5);
+    assert_eq!(body["tally"]["rejected"].as_u64().expect("rejected"), 1);
+    assert_eq!(body["tally"]["yes"].as_u64().expect("yes"), 33_500_000_000);
+    assert_eq!(body["tally"]["no"].as_u64().expect("no"), 13_000_000_000);
     assert_eq!(
-        body["tally"]["accepted"].as_u64().expect("accepted"),
-        body["entries"].as_array().expect("entries").len() as u64,
-        "every archived ballot is accepted by the tally"
+        body["tally"]["abstain"].as_u64().expect("abstain"),
+        10_800_000_000
     );
-    assert_eq!(body["tally"]["outcome"], "no_quorum");
+    assert_eq!(body["tally"]["quorum_met"], true);
+    assert_eq!(body["tally"]["outcome"], "accepted");
     assert!(
         body["tally"]["result_hash"].as_str().is_some(),
         "the close publishes result_hash"
     );
-    // The injected faults are visible in the event log: the duplicate
-    // serial rejection and the gossip retransmission dedupe.
+    // The injected faults are visible in the tally trace: the double
+    // vote's serial collision (the canonical-order replay rejects the
+    // second copy of the collided serial) and nothing else.
+    let trace = body["trace"].as_array().expect("trace");
+    let dup = trace
+        .iter()
+        .filter(|t| t["rejection"].as_str() == Some("duplicate_serial"))
+        .count();
+    assert_eq!(dup, 1, "exactly one DuplicateSerial in the close trace");
+    // The gossip retransmission never completes a second stream: six
+    // envelope wires were shipped (voters 0-4 plus the double), six
+    // streams completed - the re-sealed retransmission of voter 0 was
+    // swallowed chunk-by-chunk by the assembler (the D2c dedupe).
+    let state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(manifest_path(&format!("{R3_VECTORS}/state.json")))
+            .expect("the committed collector state exists"),
+    )
+    .expect("state is valid JSON");
+    assert_eq!(
+        state["completed"]
+            .as_array()
+            .expect("completed streams")
+            .len(),
+        6,
+        "the re-sealed retransmission must not complete a second stream"
+    );
     let events = body["ingest_events"].as_array().expect("ingest events");
     let log = serde_json::to_string(events).expect("events serialize");
     assert!(
-        log.contains("rejected:malformed:duplicate_vote"),
-        "the double vote must surface in the close trace: {log}"
+        log.contains("chunk:pending-or-duplicate"),
+        "the retransmitted chunks must be logged as duplicates: {log}"
     );
 
     // The offline auditor replays the committed close clean.

@@ -193,12 +193,21 @@ fn main() {
     };
 
     ts("ballot");
-    let (wire, sid) = ship_one(choice, "ballot");
-
-    if raw {
-        // 4. The raw fallback over the same endpoint: the canonical
-        //    ballot wire as its own stream (sid = blake3 over the wire;
-        //    the collector routes it blind into ingest_raw).
+    let (wire, sid) = if double {
+        // 5. The double-ONLY invocation (run AFTER the honest one): a
+        //    SECOND ballot on the SAME notes with the SAME choice -
+        //    the fresh proving makes the bytes distinct, the serials
+        //    collide, and the close trace carries DuplicateSerial for
+        //    the canonically-later copy (the counted shape is
+        //    independent of which copy wins the collision).
+        ts("double-vote");
+        ship_one(choice, "double")
+    } else if raw {
+        // 4. The raw-ONLY fallback (the runbook scenario shape: one
+        //    wallet publishes the weaker profile INSTEAD of the sealed
+        //    envelope): the canonical ballot wire as its own stream
+        //    (sid = blake3 over the wire; the collector routes it
+        //    blind into ingest_raw).
         let ballot = build_ballot::<DEPTH>(
             &inputs.frontier,
             &indices,
@@ -209,24 +218,20 @@ fn main() {
             choice,
         )
         .expect("raw ballot builds");
+        verify_ballot::<DEPTH>(&ballot).expect("raw ballot verifies");
         let bytes = ballot.to_bytes();
         let raw_sid: [u8; 32] = *blake3::hash(&bytes).as_bytes();
         let n = ship_wire(&spool, &bytes, raw_sid, &routing);
         ts("raw-fallback");
-        println!("voter {id} (raw): sid={} blobs={}", hex_encode(&raw_sid), n);
-    }
-
-    if double {
-        // 5. The deliberate double vote: the SAME notes, a different
-        //    choice - the serials collide and the close trace carries
-        //    DuplicateSerial.
-        let other = match choice {
-            Choice::For => Choice::Against,
-            _ => Choice::For,
-        };
-        ts("double-vote");
-        let _ = ship_one(other, "double");
-    }
+        println!(
+            "voter {id} (raw-only): sid={} blobs={}",
+            hex_encode(&raw_sid),
+            n
+        );
+        (bytes, raw_sid)
+    } else {
+        ship_one(choice, "ballot")
+    };
 
     if retransmit {
         // 6. The byte-equal retransmission: the SAME envelope wire

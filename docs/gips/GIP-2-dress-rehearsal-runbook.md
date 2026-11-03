@@ -12,9 +12,12 @@ WP-D2a stage note in GIP-2 section 9, raw smoke log
 `docs/gips/GIP-2-r2-stage-log.txt`); REBRAND EXECUTED (the legacy
 internal codename scrubbed tree-wide, the R0/R1 artifacts regenerated
 deterministically, R2 re-validated on the renamed surface - see the
-rebrand stage note in GIP-2 section 9); R3 IN PROGRESS (WP-D2b,
-WP-D2c and WP-D2d delivered - see the stage notes in GIP-2 section 9;
-the scripted scenario pending); R4 pending.
+rebrand stage note in GIP-2 section 9); R3 EXECUTED (WP-D2b, WP-D2c
+and WP-D2d delivered + the scripted N=3/M=5 scenario run - see the
+stage notes in GIP-2 section 9, raw log
+`docs/gips/GIP-2-r3-stage-log.txt`); R4 (the standing audit gate)
+remains permanently in force: the `dress_auditor` replay is the
+acceptance tool for every future close.
 
 Every stage has an executable definition of done. Stages R0 and R1
 need only new harness code in opacus-wallet; no node changes. Stages
@@ -173,9 +176,10 @@ Definition of done: the three commands above run cleanly in a fresh
 stage notes.
 
 ## 4. Stage R3 - full gov rehearsal on the testnet (the P-9 gate)
-    (IN PROGRESS: WP-D2b delivered - the wallet-gov bridge;
-    WP-D2c delivered - the gossip envelope channel; WP-D2d and the
-    scripted scenario pending)
+    (EXECUTED: WP-D2b, WP-D2c and WP-D2d delivered + the scripted
+    scenario run - see the stage notes in GIP-2 section 9, raw log
+    `docs/gips/GIP-2-r3-stage-log.txt`, committed close artifacts
+    `crates/opacus-wallet/tests/vectors/dress-r3/`)
 
 Goal: the real thing. N nodes peering, M wallets voting with notes
 that actually live in the wallet, envelopes over the v5 gossip
@@ -198,19 +202,29 @@ Work items (each independently gated, in order):
   note in GIP-2 section 9): ingest endpoint + archive + close +
   publish (reuses `BallotArchive` verbatim; no new crypto).
 
-Scenario (scripted, timestamps logged):
+Scenario (scripted, timestamps logged; EXECUTED - the concrete
+surface below is what ran, `scripts` of the stage in
+`docs/gips/GIP-2-r3-stage-log.txt`):
 
-1. Bring up N=3 nodes (`opacus start --network testnet`), mine past
-   `H_open`.
-2. The maintainer publishes `declared.json` (proposal + anchor +
-   collector pk).
-3. M=5 wallets vote: 3 FOR, 1 AGAINST, 1 ABSTAIN (one wallet votes
-   twice on the same notes - must surface as DuplicateSerial in the
-   trace).
-4. One wallet uses the raw fallback (published weaker by design).
-5. At close the collector publishes `minutes.json` +
-   `archive_id` + `result_hash`.
-6. Every participant (and one offline auditor) replays.
+1. Bring up N=3 nodes (`opacus start --network testnet` with
+   `OPACUS_NET_PORT=18081/18082/18083`, the dialers bootstrapping to
+   `127.0.0.1:18081`), 3/3 listeners bound; the solo miner solves a
+   difficulty-1000 header on the same surface.
+2. The maintainer publishes `declared.json` (`dress_collector declare
+   --gip 2 --transition 0 --h-open 100 --seed 42 --voters 5`) and the
+   collector publishes its node routing key (`gov_collector init`).
+3. M=5 wallets vote over the gossip channel (`gov_gossip_vote`):
+   3 FOR, 1 AGAINST, 1 ABSTAIN - one wallet votes twice on the same
+   notes AFTER the honest wave is ingested (must surface as
+   `DuplicateSerial` in the trace); voter 0 re-seals and re-ships its
+   envelope (the assembler must swallow it).
+4. One wallet uses the raw fallback ONLY (published weaker by
+   design; sid = blake3 over the raw wire).
+5. At close the collector publishes `minutes.json` + `archive_id` +
+   `result_hash` (the ingests run between the waves - the state
+   persists across the separate `gov_collector` processes).
+6. Every participant (and one offline auditor) replays
+   (`dress_auditor`); a flipped minutes byte is rejected.
 
 Definition of done: replay result_hash equality everywhere, the
 trace shows every injected fault, no node crash, and the whole run

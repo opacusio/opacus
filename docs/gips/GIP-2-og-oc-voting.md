@@ -630,6 +630,59 @@ items answer the open questions of section 8 in order.
   production graph stays node-free (the D2c property holds - the
   sender is a dev-target example).
 
+  R3 scenario stage note (runbook stage R3 EXECUTED - the P-9 gate):
+  the scripted rehearsal ran end to end on the renamed surface
+  (rustc 1.99.1 release, raw log `docs/gips/GIP-2-r3-stage-log.txt`).
+  N=3 nodes booted `opacus start --network testnet` with three
+  separate data dirs and ports 18081-18083 (3/3 p2p listeners bound,
+  the dialers bootstrapped to node 1, zero crashes), and the solo
+  miner solved a difficulty-1000 header on the same surface
+  (~296 H/s single-thread). The maintainer published `declared.json`
+  (gip 2 / transition 0 / h_open 100 / seed 42 / 5 voters) and the
+  collector published its node routing key (`gov_collector init`).
+  M=5 wallet processes voted over the WP-D2c channel into the WP-D2d
+  collector spool: 3 FOR, 1 AGAINST, 1 ABSTAIN - every ballot built
+  from WALLET-REAL inputs (the D2b bridge mirror of the declared
+  frontier, `gov_inputs_at(100)` snapshot root equal to the declared
+  anchor), 52 channel blobs per envelope, 364 blobs in wave 1. The
+  faults behaved exactly as designed: voter 0's re-sealed
+  retransmission was swallowed chunk-by-chunk (6 streams completed of
+  7 shipped - the D2c envelope-level dedupe), voter 3 published the
+  raw fallback ONLY (sid = blake3 over the raw wire, routed blind into
+  `ingest_raw`), and voter 4's deliberate second ballot on the same
+  notes collided with the honest abstain's serial - the canonical-order
+  replay rejected exactly one copy (`DuplicateSerial`, the counted
+  shape is independent of which copy wins). Two `gov_collector ingest`
+  runs (one per wave, separate processes over the persisted state)
+  brought the archive to 6 entries; the close published the R1-schema
+  minutes: outcome=accepted (participation 57.3e9 of the 1e12
+  denominator clears the 5% Fund quorum; 33.5e9 YES vs 13e9 NO is
+  72% > 60% approval), yes 33.5e9 / no 13e9 / abstain 10.8e9, accepted
+  5 / rejected 1, `result_hash`
+  92af734953fdd4b3a4550b5902e6314aa21a23608346cfbfd11816a8149d951a,
+  `archive_id`
+  2b11761007abbb14648007ff0768f02f2936d4e5023c9ecf8d7c4e05f23a28c9.
+  Every participant replayed: the offline `dress_auditor` verdict was
+  `replay ok` and a flipped minutes byte was rejected (digest
+  mismatch) before any replay work. The close artifacts are committed
+  under `crates/opacus-wallet/tests/vectors/dress-r3/` (declaration,
+  minutes, collector node key, the collector state with the full
+  370-event ingest log) and pinned in CI by the new replay test
+  `tests/gov_scenario_r3.rs` (clean replay + the tamper rejection +
+  the recorded scenario shape). Stage R4 (the standing audit gate)
+  needs no further code: the auditor path is the permanent acceptance
+  tool for every future real close. Artifact hashes (sha256):
+  dress-r3/declared.json
+  bf75a279743f60c85ebf420f3012a63d7eaed333f9218a7702c8a2c843887a8b;
+  dress-r3/minutes.json
+  f74b46338416164b5c4bbb5218a8316168171781ae1825cf467209069cfed589;
+  dress-r3/collector-node.json
+  4023c7f7dd3e5722ef80c2bda8d98c770ad3a4f936e86548ba4b51827146772e;
+  dress-r3/state.json
+  e9cd35ce11bdf7b3617b83647dc7f849a8ff47ccb51ec3fab840f3c3b57f4582;
+  GIP-2-r3-stage-log.txt
+  353be268d666c3a5b62adc37996d701c4929533113e209c0081e187bf86a0901.
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status
