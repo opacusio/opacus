@@ -12,9 +12,9 @@ WP-D2a stage note in GIP-2 section 9, raw smoke log
 `docs/gips/GIP-2-r2-stage-log.txt`); REBRAND EXECUTED (the legacy
 internal codename scrubbed tree-wide, the R0/R1 artifacts regenerated
 deterministically, R2 re-validated on the renamed surface - see the
-rebrand stage note in GIP-2 section 9); R3 IN PROGRESS (WP-D2b
-and WP-D2c delivered - see the stage notes in GIP-2 section 9;
-WP-D2d and the scripted scenario pending); R4 pending.
+rebrand stage note in GIP-2 section 9); R3 IN PROGRESS (WP-D2b,
+WP-D2c and WP-D2d delivered - see the stage notes in GIP-2 section 9;
+the scripted scenario pending); R4 pending.
 
 Every stage has an executable definition of done. Stages R0 and R1
 need only new harness code in opacus-wallet; no node changes. Stages
@@ -194,7 +194,8 @@ Work items (each independently gated, in order):
   note path (`opacus_network::gov_channel`), envelope-level dedupe
   keyed by the public `envelope_id` (exactly the WP-3 delivery note
   deferral).
-- **WP-D2d collector service**: ingest endpoint + archive + close +
+- **WP-D2d collector service** (DELIVERED - see the WP-D2d stage
+  note in GIP-2 section 9): ingest endpoint + archive + close +
   publish (reuses `BallotArchive` verbatim; no new crypto).
 
 Scenario (scripted, timestamps logged):

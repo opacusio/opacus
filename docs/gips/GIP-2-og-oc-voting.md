@@ -584,6 +584,52 @@ items answer the open questions of section 8 in order.
   (case-insensitive grep of HEAD for the legacy codename) next to the
   secret scan. 58 tracked files rewritten, zero residual occurrences.
 
+  WP-D2d stage note (runbook stage R3, third item): the collector
+  service is delivered as `crates/opacus-node/src/gov_service.rs` plus
+  the operator bin `gov_collector` (`init` / `ingest` / `close` over a
+  state directory and a spool directory). The service is the node-side
+  counterpart of the R1 `dress_collector`: `BallotArchive` is reused
+  VERBATIM (the runbook pins "no new crypto") and the ingest endpoint
+  now speaks the WP-D2c channel - the sender chunks the envelope wire
+  (`seal_stream`, stream id = the public `envelope_id`) and drops one
+  sealed blob per `*.gchunk` file into the spool, the collector drains
+  the spool in a sorted scan, opens every blob with the collector NODE
+  identity (the routing trust root; the ballot key stays a separate
+  trust root declared in `declared.json` and verified against the
+  derived key before anything opens) and feeds `GovAssembler`: a
+  completed stream emits the envelope wire byte-exactly, a re-sealed
+  byte-equal retransmission is swallowed by the assembler (fresh blob
+  ids, the same chunk plaintexts), a channel violation is a hard
+  verdict - logged, never fatal. A completed wire routes blind (the
+  R1 discipline): GBE1 magic -> `ingest_sealed` (scope check, open
+  with the ballot key, byte-equal dedupe), anything else -> the raw
+  fallback; every verdict lands in the event log, nothing is silently
+  dropped. A raw copy of the SAME ballot correctly surfaces as the
+  retransmission case, not a second archive entry. State is one JSON
+  file (archive entries + event log + completed stream ids); reopen
+  rebuilds the archive by the canonical raw parse (the auditor path,
+  zero proving), so ingest and close run as separate processes.
+  `close` tallies at the rehearsal depth, runs the pure P-6 rule and
+  publishes the EXACT R1 minutes schema (`{minutes_body,
+  minutes_digest}`), so the R1 `dress_auditor` replays a service close
+  unchanged. The sender side is the wallet example
+  `gov_gossip_vote.rs`: the ballot is built from WALLET-REAL inputs
+  through the WP-D2b bridge (the wallet mirrors the declared frontier
+  leaf by leaf with monotonic confirm heights, owns exactly its own
+  note, `gov_inputs_at(h_open)` snapshot root must equal the declared
+  anchor) and shipped over the channel - `--double` ships a second
+  ballot on the same notes (DuplicateSerial at the tally), `--raw`
+  ships the raw wire as its own stream (sid = blake3 over the wire),
+  `--retransmit` re-seals the same envelope. Tests: the service e2e
+  (52-blob GBE1 stream through the spool endpoint, the raw fallback
+  accepted, the re-sealed retransmission fully deduped, garbage logged
+  not fatal, persistence across reopen, the close statement and the
+  minutes schema) with two real DEPTH=32 proves, and the collector key
+  policy pinned against the R1 derivation. Layering: opacus-node gains
+  the wallet dependency (a node validates ballots); the wallet's
+  production graph stays node-free (the D2c property holds - the
+  sender is a dev-target example).
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

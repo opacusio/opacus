@@ -15,9 +15,20 @@ path = "src/main.rs"
 [dependencies]
 opacus-consensus = { path = "../opacus-consensus" }
 opacus-network = { path = "../opacus-network" }
+opacus-crypto = { path = "../opacus-crypto" }
+opacus-wallet = { path = "../opacus-wallet" }
+blake3.workspace = true
+hex.workspace = true
+serde_json = "1"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 clap.workspace = true
 dirs.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The collector tests build real rehearsal notes: the canonical Fp
+# encodings come from the zk crate (test-only - the production node
+# graph stays zk-free here; the wallet already owns the proving).
+opacus-zk = { path = "../opacus-zk" }

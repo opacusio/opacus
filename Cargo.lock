@@ -1039,10 +1039,16 @@ dependencies = [
 name = "opacus-node"
 version = "0.9.0"
 dependencies = [
+ "blake3",
  "clap",
  "dirs",
+ "hex",
  "opacus-consensus",
+ "opacus-crypto",
  "opacus-network",
+ "opacus-wallet",
+ "opacus-zk",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

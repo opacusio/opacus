@@ -1,0 +1,166 @@
+# GIP-2 runbook stage R3 - the full gov rehearsal (scripted scenario)
+# date_utc_start: 2026-11-03T06:20:03Z
+# rustc: rustc 1.99.1 (58cf8f9c3 2026-10-13)
+# binaries: target/release/{opacus,gov_collector,dress_collector,dress_auditor} + examples/gov_gossip_vote
+# sha256:
+#   opacus 78f617fcba553bbde08025a7c3ac952fa54ce5bd4983be787885a26cdfddaeda
+#   gov_collector b28df1581cc19831ecdcaeb499690bf3e2b209ab3a5ca829d4fe5b593f841246
+#   dress_collector 6be6f9ee2384e010e31fcf4a8c760bf9b7d94ed9cc68a99b4e18ebbfa90741e7
+#   dress_auditor 779ee483b8c88993db8beeb3e37da5bb076ca22c612ac47127fcdbedd1f01782
+#   gov_gossip_vote e37d69fef5c2d70c824c561ad6bce97549d4fdc2df837b4bac6da58648770efb
+
+## [1] N=3 nodes: opacus start --network testnet (p2p peering)
+# 2026-11-03T06:20:03Z booting node1 (bootstrap), node2/node3 dial 127.0.0.1:18081
+# 2026-11-03T06:20:15Z node logs (boot + peering):
+--- node1 ---
+Starting Opacus Node... (Ctrl+C to stop)
+  network:  testnet
+  data dir: /tmp/r3scenario/node1
+2026-11-03T06:20:03.444006Z  INFO opacus_node::daemon: Opacus daemon initialized at "/tmp/r3scenario/node1"
+2026-11-03T06:20:03.444018Z  INFO opacus_node::daemon: consensus: net=testnet | v4_activation_height=0 | fee_floor=0
+[opacusd-net] node f144297c285252ca listening on 0.0.0.0:18081 (advertise 127.0.0.1:18081, peers 0)
+2026-11-03T06:20:03.444235Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T06:20:03.444238Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+--- node2 ---
+Starting Opacus Node... (Ctrl+C to stop)
+  network:  testnet
+  data dir: /tmp/r3scenario/node2
+2026-11-03T06:20:03.444091Z  INFO opacus_node::daemon: Opacus daemon initialized at "/tmp/r3scenario/node2"
+2026-11-03T06:20:03.444100Z  INFO opacus_node::daemon: consensus: net=testnet | v4_activation_height=0 | fee_floor=0
+[opacusd-net] node 7011d4bada791766 listening on 0.0.0.0:18082 (advertise 127.0.0.1:18082, peers 0)
+2026-11-03T06:20:03.444377Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T06:20:03.444379Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+--- node3 ---
+Starting Opacus Node... (Ctrl+C to stop)
+  network:  testnet
+  data dir: /tmp/r3scenario/node3
+2026-11-03T06:20:03.446243Z  INFO opacus_node::daemon: Opacus daemon initialized at "/tmp/r3scenario/node3"
+2026-11-03T06:20:03.446252Z  INFO opacus_node::daemon: consensus: net=testnet | v4_activation_height=0 | fee_floor=0
+[opacusd-net] node c0f6a20a67a1d3d6 listening on 0.0.0.0:18083 (advertise 127.0.0.1:18083, peers 0)
+2026-11-03T06:20:03.446568Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T06:20:03.446572Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+listeners: 3 of 3 bound
+
+## [2] mine past H_open: solo miner on node1's wallet surface
+# 2026-11-03T06:20:15Z mining session (difficulty 1000, the engine halts on block found)
+Opacus Miner
+  Mode:     Solo
+  Threads:  1
+  Address:  opacus1cfc6868250235aa1d525bb377f2d1b719a7705f1c1826e716a76b0245fb42040b1cd00efec29c0942cfb3a0ef91664e2889d6f1d22e95f176033e609dae6c5bf
+  Duration: 120s (Ctrl+C to stop early)
+
+2026-11-03T06:20:15.458025Z  INFO opacus_miner::engine: Opacus Miner v0.9.0 | threads: 1 | mode: Solo
+2026-11-03T06:20:15.458036Z  INFO opacus_miner::engine: Mining started (difficulty: 1000)
+2026-11-03T06:20:16.135435Z  INFO opacus_miner::engine: Thread 0 found nonce 1198
+2026-11-03T06:20:20.458324Z  INFO opacus_miner::stats: BLOCK FOUND! Total: 1
+2026-11-03T06:20:20.458351Z  INFO opacus_miner::stats: Opacus Miner | Hashrate: 239.8 H/s | Uptime: 0h 0m 5s | Shares: 0 ok / 0 rej | Blocks: 1
+
+Mining session complete!
+# 2026-11-03T06:20:20Z miner done
+
+## [3] the maintainer publishes declared.json (proposal + anchor + collector pk)
+# 2026-11-03T06:20:20Z dress_collector declare --gip 2 --transition 0 --h-open 100 --seed 42 --voters 5
+declaration published: /tmp/r3scenario/gov/declared.json
+  proposal: gip=2 transition=0 h_open=100 class=fund
+  anchor:   9d0f6f1864236d85b7835120e5090f9f261a552f7030250c3d011ee3e421403c
+  collector_pk: 94ce323188650de05e21953c8bb5edf1191a03cbc4e70bd4a56b251a3f655544
+  rehearsal: seed=42 voters=5 depth=32 (the frontier is a pure function of the seed)
+voters may now drop ballots into /tmp/r3scenario/gov
+
+## [4] the collector service is initialized (node routing key published)
+# 2026-11-03T06:20:20Z gov_collector init
+collector initialized: state=/tmp/r3scenario/gov/collector node_id=9ab790c0f3cf0d65 routing_pk=60914b7c9ccdfb883fe09eca915706df04ab9d4bb792b75580c89d851d5b661b
+routing key published: /tmp/r3scenario/gov/collector-node.json (senders chunk + seal to it, gov_channel::seal_stream)
+
+## [5] M=5 wallets vote (envelopes over the gossip channel into the spool)
+# 2026-11-03T06:20:20Z voter 0: FOR + byte-equal retransmission (assembler dedupe)
+ts_ms=1793686820507 voter=0 step=ballot
+voter 0 (ballot): envelope_id=3ee69399442e88344577e3038a93578075379e95972fcbfff8905847b05cbe4d blobs=52 choice=For
+ts_ms=1793686823309 voter=0 step=retransmit
+voter 0 (retransmit): blobs=52 (assembler dedupe expected)
+voter 0 done: notes_confirmed=6 frontier_leaves=6 anchor_ok
+# 2026-11-03T06:20:23Z voter 1: FOR
+ts_ms=1793686823348 voter=1 step=ballot
+voter 1 (ballot): envelope_id=4f6395a5362b052c204be019fcf9c370b96c7a67cd8145485ee45a9bd38ad132 blobs=52 choice=For
+voter 1 done: notes_confirmed=6 frontier_leaves=6 anchor_ok
+# 2026-11-03T06:20:26Z voter 2: AGAINST
+ts_ms=1793686826094 voter=2 step=ballot
+voter 2 (ballot): envelope_id=275844cdd55f2b3e72a3f99bc66948c0e81ffb52b20468ec513e58705cf4e5b6 blobs=52 choice=Against
+voter 2 done: notes_confirmed=6 frontier_leaves=6 anchor_ok
+# 2026-11-03T06:20:28Z voter 3: FOR via the raw fallback (published weaker by design)
+ts_ms=1793686828867 voter=3 step=ballot
+voter 3 (ballot): envelope_id=8ccb59d631029e0bfb6e5edc8c887603e779d42c090f00ca531cd2d3c7629e38 blobs=52 choice=For
+ts_ms=1793686833138 voter=3 step=raw-fallback
+voter 3 (raw): sid=d72f17ed67a06630a07e0848bd26d55ba196f401e13cd3afbfe31937422a1396 blobs=52
+voter 3 done: notes_confirmed=6 frontier_leaves=6 anchor_ok
+# 2026-11-03T06:20:33Z voter 4: ABSTAIN + a deliberate double vote on the same notes
+ts_ms=1793686833191 voter=4 step=ballot
+voter 4 (ballot): envelope_id=4028289893d54bea59fa5e18f23ec74c5fc2fbe90799f73fded52377218c341d blobs=52 choice=Abstain
+ts_ms=1793686835919 voter=4 step=double-vote
+voter 4 (double): envelope_id=e2c808d41b9d83dd21456d421f3fe69a5dac232d8f6637a0afbed3f62fec0377 blobs=52 choice=For
+voter 4 done: notes_confirmed=6 frontier_leaves=6 anchor_ok
+spool files after voting: 416
+
+## [6] the collector ingests the endpoint (gossip chunk reassembly)
+# 2026-11-03T06:20:37Z gov_collector ingest
+ingest: 416 blob(s) consumed from /tmp/r3scenario/gov/spool (archived 0 -> 1)
+  ff6e2a8f038417f90c65f203.gchunk (1320 B): chunk:pending-or-duplicate
+  fec775fdc5bb6f0f88956739.gchunk (1320 B): chunk:pending-or-duplicate
+  fe1b9f9c3913888fd6efcc4f.gchunk (1320 B): rejected:enote:mac_mismatch
+  stream-complete:4f6395a5362b052c204be019fcf9c370b96c7a67cd8145485ee45a9bd38ad132 (22686 B): rejected:enote:mac_mismatch
+  fda0edecea3399d45ffeb55c.gchunk (1320 B): rejected:enote:mac_mismatch
+  stream-complete:8ccb59d631029e0bfb6e5edc8c887603e779d42c090f00ca531cd2d3c7629e38 (22686 B): rejected:enote:mac_mismatch
+  fca15037b0a92f099d5b8b91.gchunk (1320 B): chunk:pending-or-duplicate
+  fbd6207c79ab5a706b601566.gchunk (1320 B): chunk:pending-or-duplicate
+  fb521b2b3f12fbc6dde956eb.gchunk (1320 B): accepted@0
+  stream-complete:d72f17ed67a06630a07e0848bd26d55ba196f401e13cd3afbfe31937422a1396 (22588 B): accepted@0
+  fb3971b8172b4fe34fc4d8a4.gchunk (1320 B): chunk:pending-or-duplicate
+  fac37f7349241f3345650ac2.gchunk (1320 B): chunk:pending-or-duplicate
+  f9de8995db1c0caa17a482a5.gchunk (1320 B): chunk:pending-or-duplicate
+  f976a42b557765b9668be275.gchunk (1320 B): chunk:pending-or-duplicate
+  f7c8ac2fc84d421f7c339e68.gchunk (1320 B): rejected:enote:mac_mismatch
+  stream-complete:e2c808d41b9d83dd21456d421f3fe69a5dac232d8f6637a0afbed3f62fec0377 (22686 B): rejected:enote:mac_mismatch
+completed streams so far: 7
+
+## [7] close: tally + P-6 + publish
+# 2026-11-03T06:20:37Z gov_collector close
+----------------------------------------------
+close statement: outcome=no_quorum yes=10500000000 no=0 abstain=0 accepted=1 rejected=0
+result_hash=9e4626dc845a8fc9d761e41ef67fe03accd09ed1a9399f02aabd661b1148cdbf
+archive_id=dbc441a54bd54cbdb440479b90272729c839361c883ce0c72e7ddbffa5b9e421
+minutes published: /tmp/r3scenario/gov/minutes.json (blake3-pinned; the R1 dress_auditor replays it unchanged)
+
+## [8] every participant (and one offline auditor) replays
+# 2026-11-03T06:20:38Z dress_auditor --minutes
+audited: 1 entry(ies), declared gip=2 transition=0 h_open=100 class=fund, outcome=no_quorum yes=10500000000 no=0 abstain=0 accepted=1 rejected=0
+VERDICT: replay ok
+auditor_exit=0
+result_hash = 9e4626dc845a8fc9d761e41ef67fe03accd09ed1a9399f02aabd661b1148cdbf
+archive_id  = dbc441a54bd54cbdb440479b90272729c839361c883ce0c72e7ddbffa5b9e421
+outcome     = no_quorum | yes 10500000000 / no 0 / abstain 0
+trace rejections: []
+
+## [9] tamper check: one flipped byte is rejected before any replay
+REJECTED: minutes digest mismatch: published e6a898ff0fc92dd2215cedeb9006e5eaef40ae10238a88a517731ebe10b714d3, recomputed 42fc798d8ec8aa6dbe1489806e36271f0907065951877d1992ef741e69afc317 (the file was tampered with)
+tamper_auditor_exit=2 (non-zero = rejected, as required)
+
+## [10] stop the nodes, persist the artifacts
+--- node1 final ---
+[opacusd-net] node f144297c285252ca listening on 0.0.0.0:18081 (advertise 127.0.0.1:18081, peers 0)
+2026-11-03T06:20:03.444235Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T06:20:03.444238Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+--- node2 final ---
+[opacusd-net] node 7011d4bada791766 listening on 0.0.0.0:18082 (advertise 127.0.0.1:18082, peers 0)
+2026-11-03T06:20:03.444377Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T06:20:03.444379Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+--- node3 final ---
+[opacusd-net] node c0f6a20a67a1d3d6 listening on 0.0.0.0:18083 (advertise 127.0.0.1:18083, peers 0)
+2026-11-03T06:20:03.446568Z  INFO opacus_node::daemon: Opacus node running | P2P: 18080 | RPC: 18081 | net: testnet
+2026-11-03T06:20:03.446572Z  INFO opacus_node::daemon: Press Ctrl+C to stop
+
+# 2026-11-03T06:20:41Z committed artifacts:
+bf75a279743f60c85ebf420f3012a63d7eaed333f9218a7702c8a2c843887a8b  declared.json
+c825a8eb2414e6aeea86d5c30df0528468d16c1423190d00fa65ab74ae2e096e  minutes.json
+ab476054c584b930873f47f230c3ffc707675e3523a7193dcdd53c399135d838  collector-node.json
+250aabeb270da0b583b5bc21c61a9f317968a935fbfe07e4f0e409513163e537  state.json
+# date_utc_end: 2026-11-03T06:20:41Z

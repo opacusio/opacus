@@ -38,6 +38,19 @@ token (wOPACUS) and tooling for bridging, DEX swaps and atomic swaps.
 
 ### Added
 
+- GIP-2 WP-D2d collector service (opacus-node `gov_service.rs` + the
+  `gov_collector` bin): the spool ingest endpoint speaks the WP-D2c
+  gossip channel (one sealed channel blob per file, sorted drain,
+  GovAssembler reassembly keyed by the public envelope_id), the
+  completed wires route blind into the reused `BallotArchive` (GBE1 ->
+  sealed path, anything else -> the raw fallback; every verdict logged,
+  nothing silent), the state persists as one JSON file and survives
+  restarts through the canonical raw parse, and `close` publishes the
+  exact R1 minutes schema so the `dress_auditor` replays a service
+  close unchanged. The wallet example `gov_gossip_vote.rs` builds the
+  ballot through the WP-D2b wallet bridge and ships it over the channel
+  with the `--double` / `--raw` / `--retransmit` scenario faults.
+
 - WG-CLSAG-adaptor monerod-compatible CLSAG adaptor signatures
   (opacus-bridge, `clsag_adaptor.rs`): a Monero one-time spend is
   pre-signed as a STANDARD CLSAG bound to the hidden swap secret t -

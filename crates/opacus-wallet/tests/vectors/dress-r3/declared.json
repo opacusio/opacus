@@ -1,0 +1,13 @@
+{
+  "anchor": "9d0f6f1864236d85b7835120e5090f9f261a552f7030250c3d011ee3e421403c",
+  "class": "fund",
+  "collector_pk": "94ce323188650de05e21953c8bb5edf1191a03cbc4e70bd4a56b251a3f655544",
+  "gip": 2,
+  "h_open": 100,
+  "rehearsal": {
+    "depth": 32,
+    "seed": 42,
+    "voters": 5
+  },
+  "transition": 0
+}
