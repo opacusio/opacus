@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Opacus — private payments with zk spend proofs</title>
-<meta name="description" content="Opacus fuses Monero-style ring-CT semantics with Halo2 FCMP++ zero-knowledge spend proofs. Rust workspace, no trusted setup, Monero atomic swaps, wOpacus bridge. Testnet v0.7.0.">
+<meta name="description" content="Opacus fuses Monero-style ring-CT semantics with Halo2 FCMP++ zero-knowledge spend proofs. Rust workspace, no trusted setup, Monero atomic swaps, wOpacus bridge. Testnet v0.9.0.">
 <link rel="canonical" href="https://opacus.io/">
 <meta property="og:title" content="Opacus — private payments with zk spend proofs">
-<meta property="og:description" content="Monero-style ring-CT + Halo2 FCMP++ zk proofs. No trusted setup. Testnet v0.7.0.">
+<meta property="og:description" content="Monero-style ring-CT + Halo2 FCMP++ zk proofs. No trusted setup. Testnet v0.9.0.">
 <meta property="og:url" content="https://opacus.io/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23070a12'/%3E%3Ccircle cx='16' cy='14' r='9' fill='none' stroke='%237c5cff' stroke-width='2.6'/%3E%3Ccircle cx='16' cy='14' r='3.2' fill='%232dd4bf'/%3E%3Cpath d='M9 24c2.2-2 11.8-2 14 0' stroke='%237c5cff' stroke-width='2.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
@@ -97,7 +97,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
     <a class="lnk" href="#crates">Architecture</a>
     <a class="lnk" href="#roadmap">Roadmap</a>
     <span class="spacer"></span>
-    <span class="pill">v0.7.0 · testnet</span>
+    <span class="pill">v0.9.0 · testnet</span>
     <a class="lnk" href="https://github.com/opacusio/opacus">GitHub ↗</a>
   </div>
 </nav>
@@ -112,7 +112,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
     <div class="stats">
       <div class="stat"><b>2.1 s</b><span>membership spend proof at 2³² tree depth</span></div>
       <div class="stat"><b>2³²</b><span>note-commitment tree capacity, constant memory</span></div>
-      <div class="stat"><b>185</b><span>workspace tests green · zero warnings · CI clippy -D warnings</span></div>
+      <div class="stat"><b>445</b><span>workspace tests green · zero warnings · CI clippy -D warnings</span></div>
       <div class="stat"><b>0</b><span>trusted setup — IPA over Pasta (Vesta)</span></div>
     </div>
   </div>
@@ -132,7 +132,7 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></div><h3>FCMP++-style membership</h3><p>The spend proves key material belongs to the <b>global</b> set of all wallet keys at depth 2³² — the FCMP++ design — not a small anonymity ring.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></div><h3>Transparent proving system</h3><p><code>halo2_proofs 0.3.5</code> (zcash lineage) with IPA commitments over the Pasta (Vesta) scalar field. No trusted setup — every constraint is auditable.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg></div><h3>Constant-memory tree</h3><p>A sparse Merkle frontier with empty-subtree-root padding computes roots and auth paths in O(leaves + depth) — the naive approach would need ~137 GB of RAM.</p></div>
-      <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M7 17l4-4 3 3 5-6"/><path d="M3 3v18h18"/></svg></div><h3>Monero atomic swaps</h3><p>Cross-group Schnorr DLEq proofs, a hashlock state machine (<code>Offered → … → Claimed/Refunded</code>) and a length-prefixed P2P protocol with tamper-evident offer ids.</p></div>
+      <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M7 17l4-4 3 3 5-6"/><path d="M3 3v18h18"/></svg></div><h3>Monero atomic swaps</h3><p>Cross-group Schnorr DLEq proofs, a hashlock state machine (<code>Offered → … → Claimed/Refunded</code>) and a length-prefixed P2P protocol with tamper-evident offer ids — since v0.9 the hashlock is proven in-circuit and CLAIM/REFUND are enforced at consensus level.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg></div><h3>Ethereum bridge &amp; wOpacus</h3><p>Quorum-gated ERC-20 wrapper deployed to Sepolia, EIP-155 signer, Uniswap Router02 calldata builders and a JSON-RPC client — a full DEX/bridge toolchain.</p></div>
       <div class="card"><div class="ico"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg></div><h3>Daemon &amp; CLI out of the box</h3><p><code>opacusd</code> runs the net and swap services and hands authenticated connections to the swap plane; <code>opacus-cli</code> drives the shielded wallet — build, prove, self-verify before any state mutation.</p></div>
     </div>
@@ -147,13 +147,16 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
     <pre class="pre"><span class="k">$</span> git clone https://github.com/opacusio/opacus.git
 <span class="k">$</span> cd opacus
 <span class="k">$</span> cargo build --release
-<span class="k">$</span> cargo test --workspace            <span class="c"># 185 tests</span>
+<span class="k">$</span> cargo test --workspace            <span class="c"># 445 tests</span>
 
 <span class="c"># real (non-mock) IPA prover tests:</span>
 <span class="k">$</span> cargo test -p opacus-zk --features real-prover
 
 <span class="c"># run a local swap node (daemon: opacusd):</span>
-<span class="k">$</span> cargo run --release -p opacus-node --bin opacusd</pre>
+<span class="k">$</span> cargo run --release -p opacus-node --bin opacusd
+
+<span class="c"># or a full testnet node via the canonical CLI:</span>
+<span class="k">$</span> cargo run --release -p opacus-cli --bin opacus -- start --network testnet</pre>
     <p class="mut" style="margin-top:18px">Prefer mining? <code class="mono" style="color:var(--ac2)">opacus-miner</code> ships a PoW engine with stats and config. Ethereum-side contracts build with Foundry: <code class="mono" style="color:var(--ac2)">forge test --root contracts</code>.</p>
   </div>
 </section>
@@ -188,8 +191,9 @@ footer .wrap{display:flex;gap:20px;flex-wrap:wrap;align-items:center}
       <div class="it done"><b>v0.5 — opacusd daemon &amp; opacus.io</b><span>daemon rename, workspace-wide opacus rebrand, canonical site and release engineering.</span></div>
       <div class="it done"><b>v0.6 — networking</b><span>persistent node identity, DLEq-bound authenticated handshake, peer discovery with disco gossip, encrypted note transmission between wallets.</span></div>
       <div class="it done"><b>v0.7 — protocol + hardening</b><span>authenticated connections upgrade into the swap plane (NetMsg::Upgrade + attach_swap, wired in opacusd); node identity secret zeroized in memory (non-Copy SecretScalar).</span></div>
-      <div class="it"><b>prover optimization — 10 s budget</b><span>EC-chain column count and membership-path count in the v4 spend circuit; current full-spend bench ~16 s vs the 10 s budget.</span></div>
-      <div class="it"><b>on-chain swap enforcement</b><span>hashlock-in-circuit and CLSAG adaptor signatures; Refund frames become enforceable, not notices.</span></div>
+      <div class="it done"><b>v0.8 — wallet keys, prover &amp; audit hardening</b><span>BIP-39 English mnemonics for spending keys (WG-25); PROVER-10S keyset cache — full v4 spend 4.8 s cold / 2.3 s steady-state, inside the 10 s budget (WG-17); DLEq-nonce and handshake replay-cache security fixes; SECURITY.md mainnet gate; wOPACUS contract rebrand.</span></div>
+      <div class="it done"><b>v0.9 — atomic swaps end to end on testnet</b><span>in-circuit Poseidon hashlock (WG-26), chain-level CLAIM/REFUND enforcement (WG-27), in-transaction note encryption (WG-29), monerod-facing CLSAG verification (WG-CLSAG); 1551 → 1605 circuit rows at k = 11, ~7.3 ms per 2-input CLSAG verify.</span></div>
+      <div class="it done"><b>GIP-2 governance — delivered &amp; rehearsed in main</b><span>note-weighted zk voting per GIP-2: wallet-gov bridge at H_open, sealed gossip envelope channel, collector service with close + R1-schema minutes; the scripted N=3 nodes / M=5 wallets rehearsal executed end to end, artifacts pinned by a CI replay test, an offline auditor replays every close.</span></div>
       <div class="it"><b>mainnet — gated on audit</b><span>an external security audit is REQUIRED before any mainnet use. Testnet keys are throwaway.</span></div>
     </div>
     <div class="banner"><b>Status:</b> test networks only · <b>License:</b> Apache-2.0 · <b>Security audit:</b> required before mainnet — see SECURITY notes in the repository.</div>
