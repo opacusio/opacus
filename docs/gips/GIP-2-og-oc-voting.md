@@ -456,6 +456,52 @@ items answer the open questions of section 8 in order.
   (sha256): GIP-2-r2-stage-log.txt
   e831d73268bc90d3f8abea413461eb74f2886e8008d2ad2b4ddf1f32778140be.
 
+  WP-D2b stage note (runbook stage R3 work item, the wallet-gov
+  bridge): `build_ballot` now consumes wallet-real inputs. The
+  LightWallet grows a v4 note store beside the existing zk-native
+  one: `confirm_v4_leaf(entry, height)` appends every GLOBAL
+  confirmed commitment (own or foreign - the anchor root is the root
+  of the whole tree, so the mirror must hold foreign leaves too),
+  `add_v4_note(note, height)` additionally tracks the note as the
+  wallet's own votable set (`V4TrackedNote`: note, leaf index,
+  confirmed height, spent flag), `mark_v4_spent` flips the flag (the
+  v4 spend pipeline wires it in later), and `v4_leaves` /
+  `v4_balance` / `v4_note_counts` expose the store (the wallet's fiat
+  balance stays the old ledger and is deliberately untouched). Every
+  confirmation carries the chain height and heights are enforced
+  non-decreasing (`WalletError::OutOfOrder` - the sync walks blocks
+  in order; this is exactly what makes the snapshot a prefix). The
+  bridge itself is `LightWallet::gov_inputs_at(h_open) ->
+  GovInputs { frontier, notes }`: the frontier is the wallet's v4
+  tree cut to the leaves confirmed by `h_open` (new
+  `TreeState::snapshot(len)` prefix helper - its root is the anchor
+  the proposal declares, so notes confirmed after H_open are cut off
+  per R-2 while an `h_open` beyond the tip simply yields the full
+  frontier), and `notes` are the own `WalletNoteV4` entries with
+  `confirmed_height <= h_open` at their leaf positions - the exact
+  `(indices, &[&WalletNoteV4])` pair `build_ballot` consumes. Two
+  semantic decisions are pinned: a note SPENT after H_open still
+  votes (the weight is the H_open holding; the double-vote gate is
+  the R-3 serial seen-set, not the spend state - the balance excludes
+  it, the votable set does not), and the dust gate stays where P-2
+  put it (the bridge passes sub-T_min snapshots straight through;
+  `build_ballot` rejects them). Evidence is the test layer (no run
+  artifacts this item): five new tests in the wallet lib suite
+  - the snapshot cut (frontier length and votable set at h_open =
+  11/12/20/99 over a scripted sync with foreign leaves interleaved),
+  the full end-to-end feed (wallet -> `gov_inputs_at(12)` ->
+  `build_ballot::<4>` -> standalone verify -> fresh against the
+  snapshot -> STALE against the wallet's grown live frontier,
+  `RootMismatch` - the collector-side H_open gate), the
+  spent-after-H_open semantics, the out-of-order refusal (the
+  rejected leaf leaves no trace; equal heights allowed), and the
+  dust passthrough (`Dust { v: 900_000, t_min: 1_000_000 }` raised by
+  the builder, not the bridge). Wallet lib tests 48 -> 53, workspace
+  green end to end. This closes the "scan produces wallet notes, not
+  the WalletNoteV4 + frontier pair" gap of runbook section 0; the
+  remaining R3 items are WP-D2c (gossip envelope channel) and WP-D2d
+  (collector service).
+
 ## 10. Plain-language summary (non-normative)
 
 - **What is voted on**: (1) accepting or rejecting a GIP (status

@@ -136,6 +136,19 @@ impl TreeState {
         self.leaves.get(index).copied()
     }
 
+    /// Prefix snapshot: the tree as it was at `len` leaves (WP-D2b: the
+    /// frontier at the vote-open height - the root the proposal anchors
+    /// to). `None` if `len` exceeds the current leaf count.
+    pub fn snapshot(&self, len: usize) -> Option<TreeState> {
+        if len > self.leaves.len() {
+            return None;
+        }
+        Some(TreeState {
+            depth: self.depth,
+            leaves: self.leaves[..len].to_vec(),
+        })
+    }
+
     /// Number of real leaves.
     pub fn len(&self) -> usize {
         self.leaves.len()

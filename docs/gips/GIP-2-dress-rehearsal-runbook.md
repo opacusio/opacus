@@ -9,7 +9,9 @@ Progress: R0 EXECUTED (WP-D0 delivered - see the WP-D0 stage note in
 GIP-2 section 9); R1 EXECUTED (WP-D1 delivered - see the WP-D1 stage
 note in GIP-2 section 9); R2 EXECUTED (WP-D2a delivered - see the
 WP-D2a stage note in GIP-2 section 9, raw smoke log
-`docs/gips/GIP-2-r2-stage-log.txt`); R3..R4 pending.
+`docs/gips/GIP-2-r2-stage-log.txt`); R3 IN PROGRESS (WP-D2b
+delivered - see the WP-D2b stage note in GIP-2 section 9;
+WP-D2c/D2d and the scripted scenario pending); R4 pending.
 
 Every stage has an executable definition of done. Stages R0 and R1
 need only new harness code in opacus-wallet; no node changes. Stages
@@ -168,6 +170,8 @@ Definition of done: the three commands above run cleanly in a fresh
 stage notes.
 
 ## 4. Stage R3 - full gov rehearsal on the testnet (the P-9 gate)
+    (IN PROGRESS: WP-D2b delivered - the wallet-gov bridge;
+    WP-D2c/D2d and the scripted scenario pending)
 
 Goal: the real thing. N nodes peering, M wallets voting with notes
 that actually live in the wallet, envelopes over the v5 gossip
@@ -176,7 +180,8 @@ replay.
 
 Work items (each independently gated, in order):
 
-- **WP-D2b wallet-gov bridge**: expose the synced frontier +
+- **WP-D2b wallet-gov bridge** (DELIVERED - see the WP-D2b stage
+  note in GIP-2 section 9): expose the synced frontier +
   `WalletNoteV4` set at `h_open` from LightWallet so
   `build_ballot` consumes wallet-real inputs (snapshot at the
   declared height; notes confirmed after H_open carry no weight).
